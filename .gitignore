@@ -38,3 +38,4 @@ __screenshots__/
 *__pycache__
 *.db
 *.venv
+*.env

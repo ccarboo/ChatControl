@@ -8,7 +8,7 @@ def initDB():
 
     c = conn.cursor()
 
-    c.execute("""CREATE TABLE IF NOT EXISTS utente (id INTEGER PRIMARY KEY AUTOINCREMENT, username text, password text)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS utenti (username TEXT PRIMARY KEY, salt TEXT, vault BLOB)""")
 
     conn.commit()
 
