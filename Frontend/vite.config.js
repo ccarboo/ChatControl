@@ -1,18 +1,25 @@
-import { fileURLToPath, URL } from 'node:url'
-
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import vueDevTools from 'vite-plugin-vue-devtools'
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
 
-// https://vite.dev/config/
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
 export default defineConfig({
-  plugins: [
-    vue(),
-    vueDevTools(),
-  ],
+  plugins: [vue()],
   resolve: {
     alias: {
-      '@': fileURLToPath(new URL('./src', import.meta.url))
-    },
+      '@': path.resolve(__dirname, './src')
+    }
   },
+  server: {
+    https: {
+      key: fs.readFileSync(path.resolve(__dirname, './certs/key.pem')),
+      cert: fs.readFileSync(path.resolve(__dirname, './certs/cert.pem')),
+    },
+    host: 'localhost',
+    port: 5173,
+  }
 })
+
