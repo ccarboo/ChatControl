@@ -30,7 +30,10 @@ class UserData(BaseModel):
 
 class signupped(BaseModel):
     sms_code: str
-     
+
+class signupped_2fa(BaseModel):
+    password: str
+
 signup_cache = {}
 
 def deriva_master_key(passphrase: str, salt: bytes):
@@ -107,7 +110,6 @@ async def sign_up_verify(credentials: signupped, signup_session: str = Cookie(No
     if not signup_session:
         raise HTTPException(status_code=400, detail="Sessione non trovata")
     
-    # Decifro il temp_id dal cookie
     try:
         temp_id = cipher.decrypt(signup_session.encode()).decode()
     except:
@@ -150,5 +152,51 @@ async def sign_up_verify(credentials: signupped, signup_session: str = Cookie(No
     
     return {"status": "Account creato!"}
 
-#@router.post("/signup/step3")
-#async def sign_up_verify_password(temp_id: str, sms_code: str):
+@router.post("/signup/step3")
+async def sign_up_verify_password(credentials: signupped_2fa, signup_session: str = Cookie(None)):
+    if not signup_session:
+        raise HTTPException(status_code=400, detail="Sessione non trovata")
+    
+    try:
+        temp_id = cipher.decrypt(signup_session.encode()).decode()
+    except:
+        raise HTTPException(status_code=400, detail="Sessione invalida")
+
+    temp_data = signup_cache.get(temp_id)
+    if temp_data is None:
+        raise HTTPException(status_code=400, detail="Sessione scaduta o non valida")
+    client = temp_data['client']
+    try: 
+        await client.sign_in(password= credentials.password)
+        session_str = client.session.save()
+
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    
+    pubblica, privata = genera_chiavi()
+
+
+    da_cifrare = {
+        "phone": temp_data['phone'],
+        "api_id": temp_data['api_id'],
+        "api_hash": temp_data['api_hash'],
+        "username": temp_data['username'],
+        "pubblica": pubblica,
+        "privata": privata,
+        "password": credentials.password,
+        "session": session_str
+    }
+    vault_cifrato = cifra_vault(da_cifrare, temp_data['masterkey_derived'])
+
+    try:
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO utenti (username, salt, vault) VALUES (?, ?, ?)",
+                (temp_data['username'], temp_data['salt'], vault_cifrato),
+            )
+            conn.commit()
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=500, detail=str(error))
+    
+    return {"status": "Account creato!"}
