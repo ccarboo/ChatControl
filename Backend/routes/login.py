@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Response, Cookie
 import sqlite3
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -17,15 +17,19 @@ import subprocess
 
 router = APIRouter()
 
+# Chiave segreta per cifrare i cookie (in produzione, usa una variabile d'ambiente)
+SECRET_KEY = base64.urlsafe_b64encode(secrets.token_bytes(32))
+cipher = Fernet(SECRET_KEY)
+
 class UserData(BaseModel):
     api_id: str
     api_hash: str
     phone: str
     username: str
     password: str
+
 class signupped(BaseModel):
-    username: str
-    password: str
+    sms_code: str
      
 signup_cache = {}
 
@@ -65,14 +69,14 @@ def genera_chiavi():
 
 
 @router.post("/signup/step1")
-async def create_user(credentials: UserData):
+async def create_user(credentials: UserData, response: Response):
     client = TelegramClient(StringSession(), credentials.api_id, credentials.api_hash)
     await client.connect()
 
     sent_code = await client.send_code_request(credentials.phone)
     temp_id = secrets.token_hex(16)
     salt = secrets.token_bytes(16)
-    username = hashlib.sha256(pepper.encode() + credentials.password.encode()).hexdigest()
+    username = hashlib.sha256(pepper.encode() + credentials.username.encode()).hexdigest()
 
     global signup_cache
     signup_cache[temp_id] = {
@@ -85,15 +89,34 @@ async def create_user(credentials: UserData):
         "api_hash":credentials.api_hash,
         "username":username
     }
-    return {"temp_id":temp_id}
+    
+    temp_id_encrypted = cipher.encrypt(temp_id.encode()).decode()
+    response.set_cookie(
+        key="signup_session",
+        value=temp_id_encrypted,
+        httponly=True,
+        secure=True,
+        samesite="none"
+    )
+    
+    return {"status": "SMS inviato"}
      
 
 @router.post("/signup/step2")
-async def sign_up_verify(temp_id: str, sms_code: str):
+async def sign_up_verify(credentials: signupped, signup_session: str = Cookie(None)):
+    if not signup_session:
+        raise HTTPException(status_code=400, detail="Sessione non trovata")
+    
+    # Decifro il temp_id dal cookie
+    try:
+        temp_id = cipher.decrypt(signup_session.encode()).decode()
+    except:
+        raise HTTPException(status_code=400, detail="Sessione invalida")
+    
     temp_data = signup_cache.get(temp_id)
     client = temp_data['client']
     try: 
-        await client.sign_in(temp_data['phone'],sms_code,phone_code_hash=temp_data['phone_code_hash'])
+        await client.sign_in(temp_data['phone'],credentials.sms_code,phone_code_hash=temp_data['phone_code_hash'])
         session_str = client.session.save()
 
     except SessionPasswordNeededError:
@@ -112,7 +135,6 @@ async def sign_up_verify(temp_id: str, sms_code: str):
         "password": None,
         "session": session_str
     }
-    print(da_cifrare)
     vault_cifrato = cifra_vault(da_cifrare, temp_data['masterkey_derived'])
 
     try:

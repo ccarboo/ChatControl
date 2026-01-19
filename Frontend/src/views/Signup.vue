@@ -10,6 +10,7 @@ import api from '@/services/api'
 
                 phase: false,
                 phase_sign: 0,
+                temp_id: null,
                 username: '',
                 api_id: '',
                 api_hash: '',
@@ -34,20 +35,39 @@ import api from '@/services/api'
                         username: this.username,
                         password: this.passphrase
                     })
+                    console.log('first phase OK:', response.data)
+                    this.temp_id = response.data.temp_id
+                } catch (e) {
+                    this.errormsg = e.response?.data?.message || e.message
+                } finally {
+                    this.loading = false
+                    this.phase_sign = 1
+                    
+                }
+            },
+            async submitAll(){
+                this.errormsg = null
+                this.loading = true
+                try {
+                    const response = await api.post('/signup/step2', {
+                        sms_code: this.sms_code,
+                    }, { withCredentials: true })
                     console.log('Signup OK:', response.data)
                 } catch (e) {
                     this.errormsg = e.response?.data?.message || e.message
                 } finally {
                     this.loading = false
+                    this.phase_sign = 2
+                    
                 }
-            }
+            },
         },
     }
 </script>
 <template>
     <form @submit.prevent="phase ? submitForm() : nextPhase()">
    
-    <div v-show="!phase">
+    <div v-show="!phase && phase_sign == 0">
         <div class="mb-3">
             <label for="exampleInputEmail1" class="form-label">API ID</label>
             <input type="text" class="form-control" id="exampleInputEmail1" aria-describedby="emailHelp" v-model="api_id">
@@ -59,7 +79,7 @@ import api from '@/services/api'
         <button type="submit" class="btn btn-primary">Avanti</button>
     </div>
 
-    <div v-show="phase">
+    <div v-show="phase && phase_sign == 0">
         <div class="mb-3">
             <label for="exampleInputPassword1" class="form-label">Phone</label>
             <input type="tel" class="form-control" id="exampleInputPassword1" v-model="phone">
@@ -75,9 +95,18 @@ import api from '@/services/api'
         <p v-if="errormsg" class="text-danger">{{ errormsg }}</p>
         <button type="button" class="btn btn-secondary me-2" @click="phase = false">Indietro</button>
         <button type="submit" class="btn btn-primary" :disabled="loading">
-            {{ loading ? 'Attendi...' : 'Registrati' }}
+            {{ loading ? 'Attendi...' : 'Continua' }}
         </button>
     </div>
+    </form>
+    <form @submit.prevent = submitAll()>
+        <div v-show="phase_sign == 1">
+            <div class="mb-3">
+                <label for="exampleInputEmail1" class="form-label">inserisci SMS inviato</label>
+                <input type="text" class="form-control" id="exampleInputEmail1" aria-describedby="emailHelp" v-model="sms_code">
+            </div>
+            <button type="submit" class="btn btn-primary">Registrati</button>
+        </div>
 
     </form>
 </template>
