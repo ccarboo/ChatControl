@@ -57,7 +57,7 @@ def genera_chiavi():
             if linea.startswith("# public key:"):
                 pubblica = linea.split(":")[1].strip()
             elif linea.startswith("AGE-SECRET-KEY-1"):
-                privata + linea.strip()
+                privata = linea.strip()
         return pubblica, privata
     except subprocess.CalledProcessError:
         print("Errore: age-keygen non è installato. Usa 'sudo apt install age'")
@@ -68,7 +68,7 @@ def genera_chiavi():
 async def create_user(credentials: UserData):
     client = TelegramClient(StringSession(), credentials.api_id, credentials.api_hash)
     await client.connect()
-    #if not await client.is_user_authorized():
+
     sent_code = await client.send_code_request(credentials.phone)
     temp_id = secrets.token_hex(16)
     salt = secrets.token_bytes(16)
@@ -86,7 +86,7 @@ async def create_user(credentials: UserData):
         "username":username
     }
     return {"temp_id":temp_id}
-    #return 
+     
 
 @router.post("/signup/step2")
 async def sign_up_verify(temp_id: str, sms_code: str):
@@ -128,4 +128,5 @@ async def sign_up_verify(temp_id: str, sms_code: str):
     
     return {"status": "Account creato!"}
 
-    
+#@router.post("/signup/step3")
+#async def sign_up_verify_password(temp_id: str, sms_code: str):
