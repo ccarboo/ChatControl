@@ -70,6 +70,7 @@ def genera_chiavi():
         print("Errore: age-keygen non è installato. Usa 'sudo apt install age'")
         return None, None
 
+@router.get("/login")
 
 @router.post("/signup/step1")
 async def create_user(credentials: UserData, response: Response):
@@ -81,6 +82,23 @@ async def create_user(credentials: UserData, response: Response):
     salt = secrets.token_bytes(16)
     username = hashlib.sha256(pepper.encode() + credentials.username.encode()).hexdigest()
 
+    try:
+        with sqlite3.connect(DATABASE_PATH) as conn:
+            cursor = conn.cursor()
+            params = (username,)  # tupla con un solo elemento, evita che la stringa venga iterata carattere per carattere
+            cursor.execute(
+                "SELECT * FROM utenti WHERE username = ? LIMIT 1",
+                params,
+            )
+            risultati = cursor.fetchone()
+            if risultati != None:
+                raise HTTPException(status_code=409,detail='username already exists')
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=500, detail=str(error))
+    
+    
+
+
     global signup_cache
     signup_cache[temp_id] = {
         "client":client,
@@ -90,7 +108,8 @@ async def create_user(credentials: UserData, response: Response):
         "masterkey_derived":deriva_master_key(credentials.password, salt),
         "api_id":credentials.api_id,
         "api_hash":credentials.api_hash,
-        "username":username
+        "username":username,
+        "username_not_cyphered": credentials.username
     }
     
     temp_id_encrypted = cipher.encrypt(temp_id.encode()).decode()
@@ -99,14 +118,15 @@ async def create_user(credentials: UserData, response: Response):
         value=temp_id_encrypted,
         httponly=True,
         secure=True,
-        samesite="none"
+        samesite="none",
+        max_age=300,
     )
     
     return {"status": "SMS inviato"}
      
 
 @router.post("/signup/step2")
-async def sign_up_verify(credentials: signupped, signup_session: str = Cookie(None)):
+async def sign_up_verify(credentials: signupped, signup_session: str = Cookie(None), response: Response=None):
     if not signup_session:
         raise HTTPException(status_code=400, detail="Sessione non trovata")
     
@@ -131,7 +151,7 @@ async def sign_up_verify(credentials: signupped, signup_session: str = Cookie(No
         "phone": temp_data['phone'],
         "api_id": temp_data['api_id'],
         "api_hash": temp_data['api_hash'],
-        "username": temp_data['username'],
+        "username": temp_data['username_not_cyphered'],
         "pubblica": pubblica,
         "privata": privata,
         "password": None,
@@ -150,10 +170,11 @@ async def sign_up_verify(credentials: signupped, signup_session: str = Cookie(No
     except sqlite3.Error as error:
         raise HTTPException(status_code=500, detail=str(error))
     
+    response.delete_cookie("signup_session")
     return {"status": "Account creato!"}
 
 @router.post("/signup/step3")
-async def sign_up_verify_password(credentials: signupped_2fa, signup_session: str = Cookie(None)):
+async def sign_up_verify_password(credentials: signupped_2fa, signup_session: str = Cookie(None), response: Response = None):
     if not signup_session:
         raise HTTPException(status_code=400, detail="Sessione non trovata")
     
@@ -180,7 +201,7 @@ async def sign_up_verify_password(credentials: signupped_2fa, signup_session: st
         "phone": temp_data['phone'],
         "api_id": temp_data['api_id'],
         "api_hash": temp_data['api_hash'],
-        "username": temp_data['username'],
+        "username": temp_data['username_not_cyphered'],
         "pubblica": pubblica,
         "privata": privata,
         "password": credentials.password,
@@ -198,5 +219,7 @@ async def sign_up_verify_password(credentials: signupped_2fa, signup_session: st
             conn.commit()
     except sqlite3.Error as error:
         raise HTTPException(status_code=500, detail=str(error))
+    
+    response.delete_cookie("signup_session")
     
     return {"status": "Account creato!"}

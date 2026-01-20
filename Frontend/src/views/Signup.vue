@@ -18,6 +18,7 @@ import api from '@/services/api'
                 passphrase: '',
                 telegram_username: '',
                 sms_code: '',
+                password: '',
             }
         },
         methods:{
@@ -27,8 +28,9 @@ import api from '@/services/api'
             async submitForm() {
                 this.errormsg = null
                 this.loading = true
+                let response
                 try {
-                    const response = await api.post('/signup/step1', {
+                    response = await api.post('/signup/step1', {
                         api_id: this.api_id,
                         api_hash: this.api_hash,
                         phone: this.phone,
@@ -48,8 +50,9 @@ import api from '@/services/api'
             async submitAll(){
                 this.errormsg = null
                 this.loading = true
+                let response
                 try {
-                    const response = await api.post('/signup/step2', {
+                    response = await api.post('/signup/step2', {
                         sms_code: this.sms_code,
                     }, { withCredentials: true })
                     console.log('Signup OK:', response.data)
@@ -58,6 +61,32 @@ import api from '@/services/api'
                 } finally {
                     this.loading = false
                     this.phase_sign = 2
+                    if (response?.data?.status == "Account creato!"){
+                        this.$router.push('/home')
+                    }
+                }
+            },
+            async submitpass(){
+                this.errormsg = null
+                this.loading = true
+                let response
+                try {
+                    response = await api.post('/signup/step3', {
+                        password: this.password,
+                    }, { withCredentials: true })
+                    console.log('Signup OK:', response.data)
+                } catch (e) {
+                    this.errormsg = e.response?.data?.message || e.message
+                } finally {
+                    this.loading = false
+                    console.log('Response status:', response?.data?.status)
+                    if (response?.data?.status == "Account creato!"){
+                        this.$router.push('/home')
+                    }
+                    else{
+                        console.log('there was an error')
+                    }
+                    
                     
                 }
             },
@@ -108,5 +137,14 @@ import api from '@/services/api'
             <button type="submit" class="btn btn-primary">Registrati</button>
         </div>
 
+    </form>
+    <form @submit.prevent = submitpass()>
+        <div v-show="phase_sign == 2">
+            <div class="mb-3">
+                <label for="exampleInputEmail1" class="form-label">inserisci password account telegram</label>
+                <input type="password" class="form-control" id="exampleInputEmail1" aria-describedby="emailHelp" v-model="password">
+            </div>
+            <button type="submit" class="btn btn-primary">Registrati</button>
+        </div>
     </form>
 </template>
