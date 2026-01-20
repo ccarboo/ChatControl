@@ -7,34 +7,12 @@
                 some_data: null,
 
                 username: '',
+                password: '',
             }
         },
         methods: {
-            async refresh() {
-
-                this.loading = true;
-                this.errormsg = null;
-                try {
-                    let response = await this.$axios.get("/");
-                    this.some_data = response.data;
-                } catch (e) {
-                    this.errormsg = e.toString();
-                }
-                this.loading = false;
-            },
             async login(){
-                try {
-                    
-                    let response = await this.$axios.post("/user", {username: this.username});
                 
-                    sessionStorage.setItem("authorization", response.data)
-                    this.$emit("login-success")
-                    this.$router.push("/home")
-                    
-                   
-                } catch (e) {
-                    this.errormsg = e.toString();
-                }
             },
         },
         mounted() {
@@ -44,11 +22,10 @@
     }
 </script>
 <template>
-    <form>
+    <form @submit.prevent="login()">
     <div class="mb-3">
-        <label for="exampleInputEmail1" class="form-label">Email address</label>
-        <input type="email" class="form-control" id="exampleInputEmail1" aria-describedby="emailHelp">
-        <div id="emailHelp" class="form-text">We'll never share your email with anyone else.</div>
+        <label for="exampleInputEmail1" class="form-label">Username</label>
+        <input type="text" class="form-control" id="exampleInputEmail1" aria-describedby="emailHelp">
     </div>
     <div class="mb-3">
         <label for="exampleInputPassword1" class="form-label">Password</label>
