@@ -4,28 +4,30 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 from database.sqlite import get_connection
 import secrets
-from cryptography.fernet import Fernet
 from config import pepper
-from config import secret_key
 import time
 import hashlib
-from utils import deriva_master_key, decifra_vault
+from utils import deriva_master_key, decifra_vault, cipher, login_cache, cifra_vault
+from telethon import TelegramClient
+from telethon.sessions import StringSession
+from telethon.errors import SessionPasswordNeededError
+
 
 router = APIRouter()
-
-SECRET_KEY = secret_key.encode()
-cipher = Fernet(SECRET_KEY)
-
 
 class login_user(BaseModel):
     username: str
     password: str
 
-login_cache = {}
+class code(BaseModel):
+    sms: str
 
 
 @router.post("/login")
 async def login_user(credentials: login_user, response: Response):
+
+
+    
 
     username = hashlib.sha256(pepper.encode() + credentials.username.encode()).hexdigest()
     temp_id = secrets.token_hex(16)
@@ -59,12 +61,17 @@ async def login_user(credentials: login_user, response: Response):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     
+    
+    
+    client = TelegramClient(StringSession(vault_decyphered['session']), vault_decyphered['api_id'], vault_decyphered['api_hash'])
+
     global login_cache
     login_cache[temp_id] = {
         "data": vault_decyphered,
         "time": time.time(),
+        "client": client
     }
-    print(login_cache[temp_id])
+
     response.set_cookie(
         key="login_session",
         value=temp_id_encrypted,
@@ -72,6 +79,73 @@ async def login_user(credentials: login_user, response: Response):
         secure=True,
         samesite="none",
     )
-    
+
+    await client.connect()
+
+    if await client.is_user_authorized():
+        pass
+    else:
+        try:
+            await client.disconnect()
+            client = TelegramClient(StringSession(), vault_decyphered['api_id'], vault_decyphered['api_hash'])
+            await client.connect()
+
+            print(f"Tentativo di invio SMS a: {vault_decyphered['phone']}")
+            sent_code = await client.send_code_request(vault_decyphered['phone'])
+            print(f"SMS inviato con successo! phone_code_hash: {sent_code.phone_code_hash}")
+            login_cache[temp_id] = {
+                "data": vault_decyphered,
+                "time": time.time(),
+                "client": client,
+                "sent_code": sent_code
+            }
+            return {"status":"session expired"}
+        except Exception as e:
+            print(f"Errore durante l'invio dell'SMS: {type(e).__name__}: {str(e)}")
+            await client.disconnect()
+            raise HTTPException(status_code=500, detail=f"Errore invio SMS: {str(e)}")
+
     return {"status":"logged in"}
 
+@router.post("/login/expired")
+async def login_user_expired(credentials: code, response: Response, login_session: str = Cookie(None)):
+    
+    if not login_session:
+        raise HTTPException(status_code=400, detail="Sessione non trovata")
+    
+    try:
+        temp_id = cipher.decrypt(login_session.encode()).decode()
+    except:
+        raise HTTPException(status_code=400, detail="Sessione invalida")
+    
+    global login_cache
+
+    temp_data = login_cache.get(temp_id)
+    client = temp_data['client']
+
+    try: 
+        await client.sign_in(temp_data['data']['phone'], credentials.sms, phone_code_hash = temp_data['sent_code'].phone_code_hash)
+        session_str = client.session.save()
+
+    except SessionPasswordNeededError:
+        try:
+            await client.sign_in(password= temp_data['data']['password'])
+            session_str = client.session.save()
+        except Exception as e:
+            raise HTTPException(status_code=401, detail=str(e))
+    temp_data['data']['session'] = session_str
+
+    vault_ciphered = cifra_vault(temp_data['data'], temp_data['data']['masterkey'])
+    username = hashlib.sha256(pepper.encode() + temp_data['data']['username'].encode()).hexdigest()
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE utenti SET vault = ? WHERE username = ?",
+                (vault_ciphered, username),
+            )
+            conn.commit()
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=500, detail=str(error))
+    
+    return {"status":"logged in"}

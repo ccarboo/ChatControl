@@ -20,14 +20,14 @@ def initDB():
                 proprietario TEXT,
                 contatto_id TEXT,
                 vault BLOB,
-                FOREIGN KEY (proprietario) REFERENCES utenti(username) ON DELETE CASCADE ON UPDATE ,
+                FOREIGN KEY (proprietario) REFERENCES utenti(username) ON DELETE CASCADE ON UPDATE CASCADE,
                 PRIMARY KEY (proprietario, contatto_id))"""
               )
     #il gruppo_id e' l'id telegram del gruppo
 
-    c.execute("""CREATE TABLE IF NOT EXISTS contattti_gruppo (
+    c.execute("""CREATE TABLE IF NOT EXISTS contatti_gruppo (
                 proprietario TEXT,
-                gruppo_id TEXT
+                gruppo_id TEXT,
                 vault BLOB,
                 FOREIGN KEY (proprietario) REFERENCES utenti (username) ON DELETE CASCADE ON UPDATE CASCADE,
                 PRIMARY KEY (proprietario, gruppo_id))"""

@@ -97,6 +97,9 @@ async def sign_up_verify(credentials: signupped, signup_session: str = Cookie(No
         raise HTTPException(status_code=400, detail="Sessione invalida")
     
     temp_data = signup_cache.get(temp_id)
+    if temp_data is None:
+        raise HTTPException(status_code=400, detail="Sessione scaduta o non valida")
+    
     client = temp_data['client']
     try: 
         await client.sign_in(temp_data['phone'],credentials.sms_code,phone_code_hash=temp_data['phone_code_hash'])
@@ -104,6 +107,8 @@ async def sign_up_verify(credentials: signupped, signup_session: str = Cookie(No
 
     except SessionPasswordNeededError:
         return {"status": "need_2fa_password"}
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Errore durante la verifica: {str(e)}")
     
     pubblica, privata = genera_chiavi()
 
@@ -113,7 +118,7 @@ async def sign_up_verify(credentials: signupped, signup_session: str = Cookie(No
         "api_id": temp_data['api_id'],
         "api_hash": temp_data['api_hash'],
         "username": temp_data['username_not_cyphered'],
-        "masterkey":temp_data['masterkey_derived'],
+        "masterkey": temp_data['masterkey_derived'].decode() if isinstance(temp_data['masterkey_derived'], bytes) else temp_data['masterkey_derived'],
         "pubblica": pubblica,
         "privata": privata,
         "password": None,
@@ -121,6 +126,7 @@ async def sign_up_verify(credentials: signupped, signup_session: str = Cookie(No
     }
     vault_cifrato = cifra_vault(da_cifrare, temp_data['masterkey_derived'])
 
+    
     try:
         with get_connection() as conn:
             cursor = conn.cursor()

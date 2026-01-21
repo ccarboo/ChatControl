@@ -3,6 +3,13 @@ import base64
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
 import json
+from cryptography.fernet import Fernet
+from config import secret_key
+
+SECRET_KEY = secret_key.encode()
+cipher = Fernet(SECRET_KEY)
+
+login_cache = {}
 
 def deriva_master_key(passphrase: str, salt: bytes):
     kdf = Argon2id(salt=salt, length=32, iterations=2, memory_cost=65536, lanes=4)
