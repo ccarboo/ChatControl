@@ -1,5 +1,4 @@
 <script>
-import axios from 'axios'
 import api from '@/services/api'
     export default{
         data: function() {
