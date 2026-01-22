@@ -8,15 +8,13 @@ from config import pepper
 import time
 import hashlib
 from utils import deriva_master_key, decifra_vault, cipher, login_cache, cifra_vault, is_logged_in
-from telethon import TelegramClient
-from telethon.sessions import StringSession
-from telethon.errors import SessionPasswordNeededError
+from datetime import datetime
 
 router = APIRouter()
 
 
 @router.get("/chats")
-async def get_chats(login_session: str = Cookie(None)):
+async def get_chats(login_session: str = Cookie(None), offset_date: str = None):
     
     data = is_logged_in(login_session)
     client = data['client']
@@ -24,9 +22,11 @@ async def get_chats(login_session: str = Cookie(None)):
     if not client.is_connected():
         await client.connect()
 
-    
+    dt = datetime.fromisoformat(offset_date) if offset_date else None
+
     chats = []
-    async for dialog in client.iter_dialogs(limit=20):
+
+    async for dialog in client.iter_dialogs(limit=20, offset_date=dt):
         chat_info = {
             'id': dialog.id,
             'name': dialog.name,
@@ -39,7 +39,7 @@ async def get_chats(login_session: str = Cookie(None)):
         if dialog.message:
             chat_info['last_message'] = {
                 'text': dialog.message.text or '',
-                'date': dialog.message.date.isoformat() if dialog.message.date else None,
+                'date': dialog.date if dialog.message else None,
                 'sender_id': dialog.message.sender_id
             }
         
@@ -65,7 +65,7 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
         messages.append({
             'id': msg.id,
             'text': msg.message or '',
-            'date': msg.date.isoformat() if msg.date else None,
+            'date': msg.date if msg.date else None,
             'sender_id': msg.sender_id,
             'out': msg.out,
             'reply_to': msg.reply_to.reply_to_msg_id if msg.reply_to else None,

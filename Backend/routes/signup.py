@@ -170,7 +170,7 @@ async def sign_up_verify_password(credentials: signupped_2fa, signup_session: st
         "api_id": temp_data['api_id'],
         "api_hash": temp_data['api_hash'],
         "username": temp_data['username_not_cyphered'],
-        "masterkey":temp_data['masterkey_derived'],
+        "masterkey": temp_data['masterkey_derived'].decode() if isinstance(temp_data['masterkey_derived'], bytes) else temp_data['masterkey_derived'],
         "pubblica": pubblica,
         "privata": privata,
         "password": credentials.password,
