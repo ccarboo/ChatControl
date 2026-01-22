@@ -90,9 +90,7 @@ async def login_user(credentials: login_user, response: Response):
             client = TelegramClient(StringSession(), vault_decyphered['api_id'], vault_decyphered['api_hash'])
             await client.connect()
 
-            print(f"Tentativo di invio SMS a: {vault_decyphered['phone']}")
             sent_code = await client.send_code_request(vault_decyphered['phone'])
-            print(f"SMS inviato con successo! phone_code_hash: {sent_code.phone_code_hash}")
             login_cache[temp_id] = {
                 "data": vault_decyphered,
                 "time": time.time(),
@@ -101,14 +99,13 @@ async def login_user(credentials: login_user, response: Response):
             }
             return {"status":"session expired"}
         except Exception as e:
-            print(f"Errore durante l'invio dell'SMS: {type(e).__name__}: {str(e)}")
             await client.disconnect()
             raise HTTPException(status_code=500, detail=f"Errore invio SMS: {str(e)}")
 
     return {"status":"logged in"}
 
 @router.post("/login/expired")
-async def login_user_expired(credentials: code, response: Response, login_session: str = Cookie(None)):
+async def login_user_expired(credentials: code, login_session: str = Cookie(None)):
     
     if not login_session:
         raise HTTPException(status_code=400, detail="Sessione non trovata")
