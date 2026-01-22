@@ -51,13 +51,16 @@ def genera_chiavi():
         return None, None
     
 def is_logged_in(login_session: str = Cookie(None)):
+    global login_cache
     if not login_session:
         raise HTTPException(status_code=401, detail="Sessione mancante. Effettua il login.")
     try:
         temp_id = cipher.decrypt(login_session.encode()).decode()
-    except:
-        user_data = login_cache.get(temp_id)
-        if not user_data:
-            raise HTTPException(status_code=401, detail="Sessione scaduta. Riesegui il login.")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Sessione non valida. Riesegui il login.")
+
+    user_data = login_cache.get(temp_id)
+    if not user_data:
+        raise HTTPException(status_code=401, detail="Sessione scaduta. Riesegui il login.")
     user_data['time'] = time.time()
     return user_data    

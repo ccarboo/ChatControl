@@ -24,5 +24,52 @@ async def get_chats(login_session: str = Cookie(None)):
     if not client.is_connected():
         await client.connect()
 
-    chats = 
-       
+    
+    chats = []
+    async for dialog in client.iter_dialogs(limit=20):
+        chat_info = {
+            'id': dialog.id,
+            'name': dialog.name,
+            'unread_count': dialog.unread_count,
+            'is_user': dialog.is_user,
+            'is_group': dialog.is_group,
+            'is_channel': dialog.is_channel,
+        }
+        
+        if dialog.message:
+            chat_info['last_message'] = {
+                'text': dialog.message.text or '',
+                'date': dialog.message.date.isoformat() if dialog.message.date else None,
+                'sender_id': dialog.message.sender_id
+            }
+        
+        chats.append(chat_info)
+    
+    return {"chats": chats}
+
+@router.get("/chats/{chat_id}")
+async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = Cookie(None)):
+    data = is_logged_in(login_session)
+    client = data['client']
+
+    if not client.is_connected():
+        await client.connect()
+
+    try:
+        entity = await client.get_entity(chat_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Chat non trovata.")
+
+    messages = []
+    async for msg in client.iter_messages(entity, limit=limit):
+        messages.append({
+            'id': msg.id,
+            'text': msg.message or '',
+            'date': msg.date.isoformat() if msg.date else None,
+            'sender_id': msg.sender_id,
+            'out': msg.out,
+            'reply_to': msg.reply_to.reply_to_msg_id if msg.reply_to else None,
+        })
+
+    messages.reverse()  
+    return {"chat_id": chat_id, "messages": messages}
