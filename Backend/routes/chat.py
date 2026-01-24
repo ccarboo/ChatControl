@@ -9,6 +9,7 @@ import time
 import hashlib
 from utils import deriva_master_key, decifra_vault, cipher, login_cache, cifra_vault, is_logged_in
 from datetime import datetime
+import json
 
 router = APIRouter()
 
@@ -100,4 +101,16 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
         })
 
     messages.reverse()  
+
+    # Try to interpret message text as JSON payload without breaking UI
+    """for message in messages:
+        text = message.get('text') or ''
+        try:
+            parsed = json.loads(text)
+            message['json'] = parsed
+            message['is_json'] = True
+            
+        except Exception:
+            message['is_json'] = False"""
+
     return {"chat_id": chat_id, "messages": messages}

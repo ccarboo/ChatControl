@@ -33,6 +33,39 @@ def decifra_vault(blob_cifrato, master_key):
     except Exception as e:
         raise ValueError(f"Errore nella decifrazione del vault: {str(e)}")
 
+def genera_chiave_simmetrica():
+    return Fernet.generate_key()
+
+def cifra_messaggio_k(testo: str, k):
+    if isinstance(k, str):
+        k = k.encode()
+    f = Fernet(k)
+    return f.encrypt(testo.encode()).decode()
+
+def decifra_messaggio_k(blob: str, k):
+    if isinstance(k, str):
+        k = k.encode()
+    f = Fernet(k)
+    return f.decrypt(blob.encode()).decode()
+
+def cifra_con_age(plaintext: str, public_keys: list):
+    
+    try:
+        # Costruisci argomenti age: -r for each recipient
+        args = ['age']
+        for key in public_keys:
+            args.extend(['-r', key])
+        
+        # Esegui age
+        result = subprocess.run(args, input=plaintext, capture_output=True, text=True, check=True)
+        ciphertext = result.stdout
+        
+        # Converti in base64 per trasmissione sicura
+        return base64.b64encode(ciphertext.encode()).decode()
+    except subprocess.CalledProcessError as e:
+        print(f"Errore cifratura age: {e.stderr}")
+        return None
+
 def genera_chiavi():
     try:
         risultato = subprocess.run(['age-keygen'], capture_output=True, text=True, check=True)

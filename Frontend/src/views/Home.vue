@@ -52,9 +52,26 @@
               try {
                   await api.post('/messages/send', {
                     text: this.text,
-                    chat_id: this.selectedChat.id
+                    chat_id: this.selectedChat.id,
+                    chyp: false,
+                    group: this.selectChat.is_group
                   }, { withCredentials: true })
                   this.text = ''
+              } catch (e) {
+                  this.errormsg = e.response?.data?.message || e.message
+              } finally {
+                  this.loading = false
+              }
+            },
+            async sendkey(){
+              if (!this.selectedChat) {
+                return
+              }
+              this.loading = true
+              try {
+                  await api.post('/messages/initializing', {
+                    chat_id: this.selectedChat.id
+                  }, { withCredentials: true })
               } catch (e) {
                   this.errormsg = e.response?.data?.message || e.message
               } finally {
@@ -122,8 +139,9 @@
       <div class="col-md-8 col-lg-9 p-0 d-flex flex-column h-100 bg-white">
         <div v-if="selectedChat" class="d-flex flex-column h-100">
           <!-- Header Chat Attiva -->
-          <div class="p-3 border-bottom d-flex align-items-center bg-light">
+          <div class="p-3 border-bottom d-flex align-items-center justify-content-between bg-light">
             <strong>{{ selectedChat.name }}</strong>
+            <button @click="sendkey()" class="btn btn-primary btn-sm">Invia chiave</button>
           </div>
           
           <!-- Area Messaggi (qui andrà il tuo componente messaggi) -->
