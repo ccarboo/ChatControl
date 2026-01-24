@@ -62,11 +62,13 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
 
     messages = []
     async for msg in client.iter_messages(entity, limit=limit):
+        sender = await msg.get_sender()
         messages.append({
             'id': msg.id,
             'text': msg.message or '',
             'date': msg.date if msg.date else None,
             'sender_id': msg.sender_id,
+            'sender_username': getattr(sender, 'username', None) if sender else None,
             'out': msg.out,
             'reply_to': msg.reply_to.reply_to_msg_id if msg.reply_to else None,
         })
