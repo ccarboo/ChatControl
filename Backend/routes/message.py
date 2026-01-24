@@ -60,12 +60,11 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
                 raise HTTPException(status_code=500, detail=str(error))
 
             vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
-            vault_json = json.dumps(vault_deciphered)
             
-            # Estrai tutte le chiavi in una lista
+            # Estrai tutte le chiavi in una lista dalla struttura gruppo
             all_keys = []
-            if 'participants' in vault_deciphered:
-                for participant_id, participant_data in vault_deciphered['participants'].items():
+            if 'partecipanti' in vault_deciphered:
+                for participant_id, participant_data in vault_deciphered['partecipanti'].items():
                     if 'chiavi' in participant_data:
                         for chiave_info in participant_data['chiavi']:
                             all_keys.append(chiave_info)
@@ -113,12 +112,11 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
 
             vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
             
-            # Estrai tutte le chiavi dalla struttura {user_id: {chiavi: [...]}}
+            # Estrai tutte le chiavi dalla struttura contatto
             all_keys = []
-            for user_id, user_data in vault_deciphered.items():
-                if isinstance(user_data, dict) and 'chiavi' in user_data:
-                    for chiave_info in user_data['chiavi']:
-                        all_keys.append(chiave_info)
+            if 'chiavi' in vault_deciphered:
+                for chiave_info in vault_deciphered['chiavi']:
+                    all_keys.append(chiave_info)
             
             # Rimuovi chiavi scadute (fine != None)
             for key in all_keys[:]:
@@ -171,3 +169,4 @@ async def send_public_key(credentials: iniz, login_session: str = Cookie(None)):
         raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
     
     return {"status": "ok"}
+
