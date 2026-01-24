@@ -44,7 +44,33 @@ async def get_chats(login_session: str = Cookie(None), offset_date: str = None):
             }
         
         chats.append(chat_info)
+        
+    username = hashlib.sha256(pepper.encode() + data['data']['username'].encode()).hexdigest()
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute(
+                """SELECT contatto_id FROM contatti WHERE proprietario = ?
+                
+                    UNION
+                    
+                    SELECT gruppo_id FROM contatti_gruppo WHERE proprietario = ?""",
+                (username,username)
+            )
+            risultati = cursor.fetchall()
+            
+            encrypted_ids = {row[0] for row in risultati}
+           
+            for chat in chats:
+                chat_id_hash = hashlib.sha256(pepper.encode() + str(chat['id']).encode()).hexdigest()
+                chat['cyphered'] = chat_id_hash in encrypted_ids
+                
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=500, detail=str(error))
     
+
+
     return {"chats": chats}
 
 @router.get("/chats/{chat_id}")

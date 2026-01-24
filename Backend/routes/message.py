@@ -16,6 +16,10 @@ class message (BaseModel):
     text: str
     chat_id: int
 
+class iniz (BaseModel):
+    chat_id: int
+    
+
 @router.post("/messages/send")
 async def s_message( credentials: message, login_session: str = Cookie(None)):
     data = is_logged_in(login_session)
@@ -30,3 +34,13 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
         raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
     
     return {"status":"ok"}
+
+@router.post("messages/initializing")
+async def send_public_key(credentials: iniz, login_session: str = Cookie(None)):
+    data = is_logged_in(login_session)
+    client = data['client']
+
+    if not client.is_connected():
+        await client.connect()
+
+    

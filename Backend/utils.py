@@ -62,5 +62,12 @@ def is_logged_in(login_session: str = Cookie(None)):
     user_data = login_cache.get(temp_id)
     if not user_data:
         raise HTTPException(status_code=401, detail="Sessione scaduta. Riesegui il login.")
+    
+    current_time = time.time()
+
+    if current_time - user_data['time'] > 1200:
+        del login_cache[login_session]
+        raise HTTPException(status_code=401, detail="Sessione scaduta. riesegui il login")
+
     user_data['time'] = time.time()
     return user_data    

@@ -96,7 +96,20 @@
               <div class="ms-3 overflow-hidden">
                 <div class="d-flex justify-content-between align-items-center">
                   <strong class="text-truncate">{{ chat.name }}</strong>
-                  <i v-if="chat.is_encrypted" class="bi bi-lock-fill text-success small ms-2"></i>
+                  <img 
+                    v-if="chat.cyphered" 
+                    src="/lock.svg" 
+                    alt="Cifrata" 
+                    class="ms-2" 
+                    style="width: 16px; height: 16px;"
+                  >
+                  <img 
+                    v-else 
+                    src="/unlock.svg" 
+                    alt="Non cifrata" 
+                    class="ms-2" 
+                    style="width: 16px; height: 16px;"
+                  >
                 </div>
                 <div class="small text-muted text-truncate">{{ chat.last_msg }}</div>
               </div>
