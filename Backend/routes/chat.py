@@ -269,6 +269,7 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
 
     try:
         entity = await client.get_entity(chat_id)
+
     except Exception:
         raise HTTPException(status_code=404, detail="Chat non trovata.")
 
@@ -352,9 +353,10 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
     for init_msg in init_messages:
         pubblic = init_msg['public_key']
         if pubblic not in existing_keys:
+            new_key_timestamp = init_msg['date'].timestamp()
             new_key = {
                 'chiave': pubblic,
-                'inizio': init_msg['date'].timestamp(),
+                'inizio': new_key_timestamp,
                 'fine': None
             }
             
@@ -362,8 +364,17 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
                 sender_id = str(init_msg['sender_id'])
                 if sender_id not in vault_deciphered['partecipanti']:
                     vault_deciphered['partecipanti'][sender_id] = {'chiavi': []}
+                
+                # Aggiorna la fine della chiave precedente
+                if vault_deciphered['partecipanti'][sender_id]['chiavi']:
+                    vault_deciphered['partecipanti'][sender_id]['chiavi'][-1]['fine'] = new_key_timestamp - 1
+                
                 vault_deciphered['partecipanti'][sender_id]['chiavi'].append(new_key)
             else:
+                # Aggiorna la fine della chiave precedente
+                if vault_deciphered['chiavi']:
+                    vault_deciphered['chiavi'][-1]['fine'] = new_key_timestamp - 1
+                
                 vault_deciphered['chiavi'].append(new_key)
             
             existing_keys.add(pubblic)
