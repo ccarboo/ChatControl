@@ -51,7 +51,7 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
                     cursor = conn.cursor()
                     
                     cursor.execute(
-                        """SELECT vault FROM contatti_gruppo WHERE proprietario = ? AND group_id = ?""",
+                        """SELECT vault FROM contatti_gruppo WHERE proprietario = ? AND gruppo_id = ?""",
                         (username,chat_id)
                     )
                     risultato = cursor.fetchone()
@@ -61,7 +61,6 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
 
             vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
             
-            # Estrai tutte le chiavi in una lista dalla struttura gruppo
             all_keys = []
             if 'partecipanti' in vault_deciphered:
                 for participant_id, participant_data in vault_deciphered['partecipanti'].items():
@@ -80,7 +79,6 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
                 "text" : text_cyp,
                 "key" : key_ciphered
             }
-            # Calcola hash SHA-256 del JSON
             json_da_hashare = json.dumps(da_hashare, sort_keys=True)
             mac = hashlib.sha256(json_da_hashare.encode()).hexdigest()
             finale = {
@@ -112,13 +110,11 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
 
             vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
             
-            # Estrai tutte le chiavi dalla struttura contatto
             all_keys = []
             if 'chiavi' in vault_deciphered:
                 for chiave_info in vault_deciphered['chiavi']:
                     all_keys.append(chiave_info)
             
-            # Rimuovi chiavi scadute (fine != None)
             for key in all_keys[:]:
                 if key.get('fine') is not None:
                     all_keys.remove(key)
@@ -130,7 +126,7 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
                 "text" : text_cyp,
                 "key" : key_ciphered
             }
-            # Calcola hash SHA-256 del JSON
+
             json_da_hashare = json.dumps(da_hashare, sort_keys=True)
             mac = hashlib.sha256(json_da_hashare.encode()).hexdigest()
             finale = {
@@ -154,7 +150,6 @@ async def send_public_key(credentials: iniz, login_session: str = Cookie(None)):
     if not client.is_connected():
         await client.connect()
     
-    # Controlla che la chiave pubblica esista
     if 'pubblica' not in data['data']:
         raise HTTPException(status_code=400, detail="Chiave pubblica non trovata nei dati utente")
 

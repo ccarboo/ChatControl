@@ -11,7 +11,8 @@ from cryptography.fernet import Fernet
 from config import pepper
 from config import secret_key
 import hashlib
-from utils import deriva_master_key, cifra_vault, genera_chiavi
+import time
+from utils import deriva_master_key, cifra_vault, genera_chiavi, login_cache
 
 router = APIRouter()
 
@@ -139,6 +140,24 @@ async def sign_up_verify(credentials: signupped, signup_session: str = Cookie(No
         raise HTTPException(status_code=500, detail=str(error))
     
     response.delete_cookie("signup_session")
+
+    temp_id = secrets.token_hex(16)
+    temp_id_encrypted = cipher.encrypt(temp_id.encode()).decode()
+
+    login_cache[temp_id] = {
+        "data" : da_cifrare,
+        "time" : time.time(),
+        "client" : client
+    }
+
+    response.set_cookie(
+        key="login_session",
+        value=temp_id_encrypted,
+        httponly=True,
+        secure=True,
+        samesite="none",
+    )
+
     return {"status": "Account creato!"}
 
 @router.post("/signup/step3")
@@ -190,5 +209,22 @@ async def sign_up_verify_password(credentials: signupped_2fa, signup_session: st
         raise HTTPException(status_code=500, detail=str(error))
     
     response.delete_cookie("signup_session")
+    
+    temp_id = secrets.token_hex(16)
+    temp_id_encrypted = cipher.encrypt(temp_id.encode()).decode()
+
+    login_cache[temp_id] = {
+        "data" : da_cifrare,
+        "time" : time.time(),
+        "client" : client
+    }
+
+    response.set_cookie(
+        key="login_session",
+        value=temp_id_encrypted,
+        httponly=True,
+        secure=True,
+        samesite="none",
+    )
     
     return {"status": "Account creato!"}

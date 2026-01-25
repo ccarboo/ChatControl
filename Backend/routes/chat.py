@@ -7,7 +7,7 @@ import secrets
 from config import pepper
 import time
 import hashlib
-from utils import deriva_master_key, decifra_vault, cipher, login_cache, cifra_vault, is_logged_in
+from utils import deriva_master_key, decifra_vault, cipher, login_cache, cifra_vault, is_logged_in, is_valid_age_public_key
 from datetime import datetime
 import json
 
@@ -125,6 +125,8 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
             cif_flag = message['json'].get('CIF') or message['json'].get('cif')
             if cif_flag == "in":
                 pubblic = message['json'].get('public')
+                if pubblic is None or not is_valid_age_public_key(pubblic):
+                    continue
                 vault_deciphered = None
                 all_keys = []
                 insert_new_vault = False
@@ -139,7 +141,7 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                         with get_connection() as conn:
                             cursor = conn.cursor()
                             cursor.execute(
-                                """SELECT vault FROM contatti_gruppo WHERE proprietario = ? AND group_id = ?""",
+                                """SELECT vault FROM contatti_gruppo WHERE proprietario = ? AND gruppo_id = ?""",
                                 (username, chat_id)
                             )
                             risultato = cursor.fetchone()
@@ -228,12 +230,12 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                             if is_group:
                                 if insert_new_vault:
                                     cursor.execute(
-                                        """INSERT INTO contatti_gruppo (proprietario, group_id, vault) VALUES (?, ?, ?)""",
+                                        """INSERT INTO contatti_gruppo (proprietario, gruppo_id, vault) VALUES (?, ?, ?)""",
                                         (username, chat_id, vault_cifrato)
                                     )
                                 else:
                                     cursor.execute(
-                                        """UPDATE contatti_gruppo SET vault = ? WHERE proprietario = ? AND group_id = ?""",
+                                        """UPDATE contatti_gruppo SET vault = ? WHERE proprietario = ? AND gruppo_id = ?""",
                                         (vault_cifrato, username, chat_id)
                                     )
                             else:
@@ -255,3 +257,153 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                 
 
     return {"chat_id": chat_id, "messages": messages}
+
+@router.get("/chats/{chat_id}/inits")
+async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
+    data = is_logged_in(login_session)
+    client = data['client']
+    username = hashlib.sha256(pepper.encode() + data['data']['username'].encode()).hexdigest()
+    
+    if not client.is_connected():
+        await client.connect()
+
+    try:
+        entity = await client.get_entity(chat_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Chat non trovata.")
+
+    init_messages = []
+    async for msg in client.iter_messages(entity, search='"cif":"in"'):
+        text = msg.message or ''
+        try:
+            parsed = json.loads(text)
+            cif_flag = parsed.get('CIF') or parsed.get('cif')
+            pubblic = parsed.get('public')
+
+            if cif_flag == "in" and pubblic is not None and is_valid_age_public_key(pubblic):
+                init_messages.append({
+                    'id': msg.id,
+                    'date': msg.date,
+                    'public_key': pubblic,
+                    'sender_id': msg.sender_id
+                })
+        except Exception:
+            continue
+
+    is_group = bool(
+        getattr(entity, 'is_group', False)
+        or getattr(entity, 'megagroup', False)
+        or getattr(entity, 'gigagroup', False)
+    )
+
+    vault_deciphered = None
+    insert_new_vault = False
+    
+    try:
+        if is_group:
+            with get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """SELECT vault FROM contatti_gruppo WHERE proprietario = ? AND gruppo_id = ?""",
+                    (username, chat_id)
+                )
+                risultato = cursor.fetchone()
+                if not risultato or not risultato[0]:
+                    vault_deciphered = {
+                        'gruppo_id': chat_id,
+                        'gruppo_nome': getattr(entity, 'title', 'Gruppo'),
+                        'partecipanti': {}
+                    }
+                    insert_new_vault = True
+                else:
+                    vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
+        else:
+            with get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """SELECT vault FROM contatti WHERE proprietario = ? AND contatto_id = ?""",
+                    (username, chat_id)
+                )
+                risultato = cursor.fetchone()
+                if not risultato or not risultato[0]:
+                    sender = await client.get_entity(chat_id)
+                    vault_deciphered = {
+                        'user_id': chat_id,
+                        'username': getattr(sender, 'username', str(chat_id)) if sender else str(chat_id),
+                        'chiavi': []
+                    }
+                    insert_new_vault = True
+                else:
+                    vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=500, detail=str(error))
+
+    all_keys = []
+    if is_group and 'partecipanti' in vault_deciphered:
+        for participant_data in vault_deciphered['partecipanti'].values():
+            if 'chiavi' in participant_data:
+                all_keys.extend(participant_data['chiavi'])
+    elif not is_group and 'chiavi' in vault_deciphered:
+        all_keys.extend(vault_deciphered['chiavi'])
+
+    existing_keys = {k['chiave'] for k in all_keys}
+    keys_added = 0
+
+    for init_msg in init_messages:
+        pubblic = init_msg['public_key']
+        if pubblic not in existing_keys:
+            new_key = {
+                'chiave': pubblic,
+                'inizio': init_msg['date'].timestamp(),
+                'fine': None
+            }
+            
+            if is_group:
+                sender_id = str(init_msg['sender_id'])
+                if sender_id not in vault_deciphered['partecipanti']:
+                    vault_deciphered['partecipanti'][sender_id] = {'chiavi': []}
+                vault_deciphered['partecipanti'][sender_id]['chiavi'].append(new_key)
+            else:
+                vault_deciphered['chiavi'].append(new_key)
+            
+            existing_keys.add(pubblic)
+            keys_added += 1
+
+    if keys_added > 0:
+        vault_cifrato = cifra_vault(vault_deciphered, data['data']['masterkey'])
+        try:
+            with get_connection() as conn:
+                cursor = conn.cursor()
+                if is_group:
+                    if insert_new_vault:
+                        cursor.execute(
+                            """INSERT INTO contatti_gruppo (proprietario, gruppo_id, vault) VALUES (?, ?, ?)""",
+                            (username, chat_id, vault_cifrato)
+                        )
+                    else:
+                        cursor.execute(
+                            """UPDATE contatti_gruppo SET vault = ? WHERE proprietario = ? AND gruppo_id = ?""",
+                            (vault_cifrato, username, chat_id)
+                        )
+                else:
+                    if insert_new_vault:
+                        cursor.execute(
+                            """INSERT INTO contatti (proprietario, contatto_id, vault) VALUES (?, ?, ?)""",
+                            (username, chat_id, vault_cifrato)
+                        )
+                    else:
+                        cursor.execute(
+                            """UPDATE contatti SET vault = ? WHERE proprietario = ? AND contatto_id = ?""",
+                            (vault_cifrato, username, chat_id)
+                        )
+                conn.commit()
+        except sqlite3.Error as error:
+            raise HTTPException(status_code=500, detail=str(error))
+
+    return {
+        "chat_id": chat_id,
+        "init_messages_found": len(init_messages),
+        "keys_added": keys_added,
+        "total_keys": len(existing_keys)
+    }
+    

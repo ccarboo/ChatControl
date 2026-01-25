@@ -7,6 +7,7 @@ from cryptography.fernet import Fernet
 from config import secret_key
 from fastapi import Cookie, HTTPException
 import time
+import re
 
 SECRET_KEY = secret_key.encode()
 cipher = Fernet(SECRET_KEY)
@@ -104,3 +105,8 @@ def is_logged_in(login_session: str = Cookie(None)):
 
     user_data['time'] = time.time()
     return user_data    
+def is_valid_age_public_key(key: str):
+    pattern = r"^age1[0-9a-z]{58}$"
+    if re.match(pattern, key):
+        return True
+    return False
