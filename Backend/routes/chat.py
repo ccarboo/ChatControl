@@ -82,6 +82,7 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
     data = is_logged_in(login_session)
     chat_id_cif = hashlib.sha256(pepper.encode() + str(chat_id).encode()).hexdigest()
 
+    
     client = data['client']
     username = hashlib.sha256(pepper.encode() + data['data']['username'].encode()).hexdigest()
     if not client.is_connected():
@@ -253,59 +254,72 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                 mac = message['json'].get('mac')
 
                 ricostruito = {
-                    "cif":"on",
-                    "text":text,
-                    "key":key
+                    "cif": "on",
+                    "text": text,
+                    "key": key
                 }
 
                 json_ricostruito = json.dumps(ricostruito, sort_keys=True)
                 mac_calc = hashlib.sha256(json_ricostruito.encode()).hexdigest()
                 timestamp = message.get('date')
-                
 
                 if mac == mac_calc:
                     timestamp_unix = timestamp.timestamp() if timestamp else None
-                    chiave_valida = None
-                    
+                    chats_data = data['data'].get('chats', {})
+                    chat_keys = chats_data.get(chat_id_cif, {})
+
+                    # Costruisci la lista di chiavi candidate: prima la corrente, poi le storiche
+                    candidate_privates = []
+
+                    chiave_corrente = chat_keys.get('chiave', {})
+                    if chiave_corrente.get('privata'):
+                        candidate_privates.append(chiave_corrente.get('privata'))
+
+                    chiavi_storiche = chat_keys.get('chiavi', [])
+                    # Ordina per inizio decrescente per provare le più recenti prima
+                    chiavi_storiche_sorted = sorted(
+                        [c for c in chiavi_storiche if c.get('privata')],
+                        key=lambda c: c.get('inizio', 0),
+                        reverse=True
+                    )
+                    for c in chiavi_storiche_sorted:
+                        candidate_privates.append(c.get('privata'))
+
+                    # Se disponibile un timestamp, prova a mettere in testa la chiave stimata via tempo
                     if timestamp_unix:
-                        # Recupera le chiavi della chat specifica
-                        chats_data = data['data'].get('chats', {})
-                        chat_keys = chats_data.get(chat_id_cif, {})
-                        
-                        chiave_corrente = chat_keys.get('chiave', {})
+                        chiave_stimata = None
                         inizio_corrente = chiave_corrente.get('inizio', 0)
-                        
                         if timestamp_unix >= inizio_corrente:
-                            chiave_valida = chiave_corrente
+                            chiave_stimata = chiave_corrente
                         else:
-                            chiavi_storiche = chat_keys.get('chiavi', [])
-                            for chiave_storica in chiavi_storiche:
+                            for chiave_storica in chiavi_storiche_sorted:
                                 inizio = chiave_storica.get('inizio', 0)
                                 fine = chiave_storica.get('fine')
-                                
-                                if fine is None:
-                                    if timestamp_unix >= inizio:
-                                        chiave_valida = chiave_storica
-                                        break
-                                else:
-                                    if inizio <= timestamp_unix <= fine:
-                                        chiave_valida = chiave_storica
-                                        break
-                    
-                    
-                    if chiave_valida and chiave_valida.get('privata'):
-                        try:
-                           
-                            chiave_privata = chiave_valida.get('privata')
-                            
-                            if chiave_privata:
-                                key_cifrato_bytes = base64.b64decode(key)
-                            
-                                
+                                if fine is None and timestamp_unix >= inizio:
+                                    chiave_stimata = chiave_storica
+                                    break
+                                elif fine is not None and inizio <= timestamp_unix <= fine:
+                                    chiave_stimata = chiave_storica
+                                    break
+                        if chiave_stimata and chiave_stimata.get('privata'):
+                            # Metti la chiave stimata al primo posto
+                            priv = chiave_stimata.get('privata')
+                            candidate_privates = [priv] + [p for p in candidate_privates if p != priv]
+
+                    # Prova a decifrare la chiave simmetrica con ciascuna identity finché una funziona
+                    key_cifrato_bytes = None
+                    try:
+                        key_cifrato_bytes = base64.b64decode(key)
+                    except Exception:
+                        key_cifrato_bytes = None
+
+                    if key_cifrato_bytes:
+                        key_decifrato = None
+                        for privata in candidate_privates:
+                            try:
                                 with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
-                                    keyfile.write(chiave_privata)
+                                    keyfile.write(privata)
                                     keyfile_path = keyfile.name
-                                
                                 try:
                                     result = subprocess.run(
                                         ['age', '-d', '-i', keyfile_path],
@@ -314,24 +328,29 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                                         check=True
                                     )
                                     key_decifrato = result.stdout.decode()
+                                    # Se siamo qui, questa privata ha funzionato
+                                    break
                                 finally:
                                     import os
                                     os.unlink(keyfile_path)
-                                
-                                
+                            except Exception:
+                                # Continua a provare con le altre chiavi
+                                continue
+
+                        if key_decifrato:
+                            try:
                                 text_decifrato = decifra_messaggio_k(text, key_decifrato)
                                 print(f"DEBUG: Testo decifrato: {text_decifrato[:50] if len(text_decifrato) > 50 else text_decifrato}")
                                 message['text'] = text_decifrato
-                                
                                 if 'json' in message:
                                     del message['json']
                                 message['is_json'] = False
-                        except Exception as e:
-                            print(f"Errore decifratura: {e}")
-                            import traceback
-                            traceback.print_exc()
+                            except Exception as e:
+                                print(f"Errore decifratura contenuto: {e}")
+                                import traceback
+                                traceback.print_exc()
                 
-
+    print(data)
     return {"chat_id": chat_id, "messages": messages}
 
 @router.get("/chats/{chat_id}/inits")

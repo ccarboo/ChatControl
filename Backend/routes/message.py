@@ -183,7 +183,7 @@ async def send_public_key(credentials: iniz, login_session: str = Cookie(None)):
     # Verifica se è stata generata una chiave per questa chat entro 24 ore
     if chiave_corrente_chat and chiave_corrente_chat.get('inizio'):
         inizio_corrente = chiave_corrente_chat.get('inizio', 0)
-        if time.time() - inizio_corrente < 86400:
+        if time.time() - inizio_corrente < 10:
             raise HTTPException(status_code=409, detail="Aspetta più tempo per generare un'altra chiave per questa chat")
 
     # Genera nuova coppia di chiavi
@@ -237,5 +237,6 @@ async def send_public_key(credentials: iniz, login_session: str = Cookie(None)):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
     
+    print(data)
     return {"status": "ok"}
 
