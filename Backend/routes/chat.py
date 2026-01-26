@@ -268,30 +268,24 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                     chats_data = data['data'].get('chats', {})
                     chat_keys = chats_data.get(chat_id_cif, {})
 
-                    # Costruisci la lista di chiavi candidate: prima la corrente, poi le storiche
+                    # Costruisci la lista di chiavi candidate: stima dal timestamp, poi backup
                     candidate_privates = []
 
                     chiave_corrente = chat_keys.get('chiave', {})
-                    if chiave_corrente.get('privata'):
-                        candidate_privates.append(chiave_corrente.get('privata'))
-
                     chiavi_storiche = chat_keys.get('chiavi', [])
-                    # Ordina per inizio decrescente per provare le più recenti prima
                     chiavi_storiche_sorted = sorted(
                         [c for c in chiavi_storiche if c.get('privata')],
                         key=lambda c: c.get('inizio', 0),
                         reverse=True
                     )
-                    for c in chiavi_storiche_sorted:
-                        candidate_privates.append(c.get('privata'))
 
-                    # Se disponibile un timestamp, prova a mettere in testa la chiave stimata via tempo
+                    # Se disponibile un timestamp, prova a trovare la chiave esatta tramite il tempo
                     if timestamp_unix:
-                        chiave_stimata = None
                         inizio_corrente = chiave_corrente.get('inizio', 0)
                         if timestamp_unix >= inizio_corrente:
                             chiave_stimata = chiave_corrente
                         else:
+                            chiave_stimata = None
                             for chiave_storica in chiavi_storiche_sorted:
                                 inizio = chiave_storica.get('inizio', 0)
                                 fine = chiave_storica.get('fine')
@@ -301,10 +295,22 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                                 elif fine is not None and inizio <= timestamp_unix <= fine:
                                     chiave_stimata = chiave_storica
                                     break
+                        
+                        # Prova la chiave stimata, poi al massimo la precedente
                         if chiave_stimata and chiave_stimata.get('privata'):
-                            # Metti la chiave stimata al primo posto
-                            priv = chiave_stimata.get('privata')
-                            candidate_privates = [priv] + [p for p in candidate_privates if p != priv]
+                            candidate_privates.append(chiave_stimata.get('privata'))
+                        
+                        # Aggiungi come backup solo la chiave precedente se diversa dalla stimata
+                        if chiavi_storiche_sorted:
+                            chiave_precedente = chiavi_storiche_sorted[0]
+                            if chiave_precedente.get('privata') and chiave_precedente.get('privata') != (chiave_stimata.get('privata') if chiave_stimata else None):
+                                candidate_privates.append(chiave_precedente.get('privata'))
+                    else:
+                        # Se non abbiamo timestamp, prova la corrente e poi la precedente
+                        if chiave_corrente.get('privata'):
+                            candidate_privates.append(chiave_corrente.get('privata'))
+                        if chiavi_storiche_sorted and chiavi_storiche_sorted[0].get('privata'):
+                            candidate_privates.append(chiavi_storiche_sorted[0].get('privata'))
 
                     # Prova a decifrare la chiave simmetrica con ciascuna identity finché una funziona
                     key_cifrato_bytes = None
