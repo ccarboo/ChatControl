@@ -67,11 +67,13 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
                         all_keys.remove(k)
                 recipient_keys = [k['chiave'] for k in all_keys if k.get('chiave')]
 
-            user_pubblica = data['data']['chiave']['pubblica']
-            if user_pubblica and user_pubblica not in recipient_keys:
-                recipient_keys.append(user_pubblica)
-            
-        
+            # Recupera la chiave pubblica attiva per questa chat
+            if 'chats' in data['data'] and chat_id in data['data']['chats']:
+                chat_data = data['data']['chats'][chat_id]
+                if 'chiave' in chat_data and 'pubblica' in chat_data['chiave']:
+                    user_pubblica = chat_data['chiave']['pubblica']
+                    if user_pubblica and user_pubblica not in recipient_keys:
+                        recipient_keys.append(user_pubblica)
             
             if not recipient_keys:
                 raise HTTPException(status_code=400, detail="Nessuna chiave disponibile per cifrare")
@@ -122,11 +124,13 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
                         all_keys.remove(k)
                 recipient_keys = [k['chiave'] for k in all_keys if k.get('chiave')]
 
-            user_pubblica = data['data']['chiave']['pubblica']
-            if user_pubblica and user_pubblica not in recipient_keys:
-                recipient_keys.append(user_pubblica)
-            
-            
+            # Recupera la chiave pubblica attiva per questa chat
+            if 'chats' in data['data'] and chat_id in data['data']['chats']:
+                chat_data = data['data']['chats'][chat_id]
+                if 'chiave' in chat_data and 'pubblica' in chat_data['chiave']:
+                    user_pubblica = chat_data['chiave']['pubblica']
+                    if user_pubblica and user_pubblica not in recipient_keys:
+                        recipient_keys.append(user_pubblica)
             
             if not recipient_keys:
                 raise HTTPException(status_code=400, detail="Nessuna chiave disponibile per cifrare")
@@ -165,18 +169,24 @@ async def send_public_key(credentials: iniz, login_session: str = Cookie(None)):
     if not client.is_connected():
         await client.connect()
 
-    chiave_corrente = None
-
+    # Hash del chat_id per identificare univocamente la chat
+    chat_id_hash = hashlib.sha256(pepper.encode() + str(credentials.chat_id).encode()).hexdigest()
     
-    if 'chiave' in data['data']:
-        chiave_corrente = data['data'].get('chiave', {})
-        inizio_corrente = chiave_corrente.get('inizio', 0)
+    # Inizializza la struttura chats se non esiste
+    if 'chats' not in data['data']:
+        data['data']['chats'] = {}
     
+    # Recupera le chiavi specifiche per questa chat
+    chat_data = data['data']['chats'].get(chat_id_hash, {})
+    chiave_corrente_chat = chat_data.get('chiave', {})
+    
+    # Verifica se è stata generata una chiave per questa chat entro 24 ore
+    if chiave_corrente_chat and chiave_corrente_chat.get('inizio'):
+        inizio_corrente = chiave_corrente_chat.get('inizio', 0)
         if time.time() - inizio_corrente < 86400:
-            raise HTTPException(status_code=409, detail="Aspetta più tempo per generare un'altra chiave")
+            raise HTTPException(status_code=409, detail="Aspetta più tempo per generare un'altra chiave per questa chat")
 
-
-
+    # Genera nuova coppia di chiavi
     pubblica, privata = genera_chiavi()
     chiave_nuova = {
         "pubblica": pubblica,
@@ -184,21 +194,25 @@ async def send_public_key(credentials: iniz, login_session: str = Cookie(None)):
         "inizio": time.time(),
     }
 
-    
+    # Prepara la lista di chiavi precedenti per questa chat
     chiavi_lista = []
     
+    # Aggiungi la chiave corrente alla lista con timestamp di fine
+    if chiave_corrente_chat and chiave_corrente_chat.get('pubblica'):
+        chiave_corrente_chat['fine'] = time.time() - 1
+        chiavi_lista.append(chiave_corrente_chat)
     
-    if chiave_corrente and chiave_corrente.get('pubblica'):
-        chiave_corrente['fine'] = time.time() - 1
-        chiavi_lista.append(chiave_corrente)
-    
-    
-    chiavi_precedenti = data['data'].get('chiavi', [])
+    # Aggiungi le chiavi precedenti di questa chat
+    chiavi_precedenti = chat_data.get('chiavi', [])
     chiavi_lista.extend(chiavi_precedenti)
     
-    data['data']['chiave'] = chiave_nuova
-    data['data']['chiavi'] = chiavi_lista
+    # Aggiorna le chiavi per questa chat specifica
+    data['data']['chats'][chat_id_hash] = {
+        'chiave': chiave_nuova,
+        'chiavi': chiavi_lista
+    }
 
+    # Salva il vault aggiornato nel database
     username = hashlib.sha256(pepper.encode() + data['data']['username'].encode()).hexdigest()
     vault_cifrato = cifra_vault(data['data'], data['data']['masterkey'])
     
@@ -223,6 +237,5 @@ async def send_public_key(credentials: iniz, login_session: str = Cookie(None)):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
     
-    print(data)
     return {"status": "ok"}
 

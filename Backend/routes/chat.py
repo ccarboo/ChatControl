@@ -268,13 +268,17 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                     chiave_valida = None
                     
                     if timestamp_unix:
-                        chiave_corrente = data['data'].get('chiave', {})
+                        # Recupera le chiavi della chat specifica
+                        chats_data = data['data'].get('chats', {})
+                        chat_keys = chats_data.get(chat_id_cif, {})
+                        
+                        chiave_corrente = chat_keys.get('chiave', {})
                         inizio_corrente = chiave_corrente.get('inizio', 0)
                         
                         if timestamp_unix >= inizio_corrente:
                             chiave_valida = chiave_corrente
                         else:
-                            chiavi_storiche = data['data'].get('chiavi', [])
+                            chiavi_storiche = chat_keys.get('chiavi', [])
                             for chiave_storica in chiavi_storiche:
                                 inizio = chiave_storica.get('inizio', 0)
                                 fine = chiave_storica.get('fine')
