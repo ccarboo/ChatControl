@@ -11,6 +11,7 @@
                 selectedChat: null,
                 messaggi: [],
                 text: '',
+                useAltSend: false,
                 chatsInterval: null,
                 chatReloadInterval: null
             }
@@ -83,6 +84,33 @@
                   this.loading = false
               }
             },
+            async handleSubmit(){
+              if (this.useAltSend) {
+                await this.sendChyp()
+              } else {
+                await this.sendMessage()
+              }
+            },
+            async sendChyp(){
+              if (!this.selectedChat || !this.text?.trim()) {
+                return
+              }
+              this.loading = true
+              try {
+                  await api.post('/messages/send', {
+                    text: this.text,
+                    chat_id: this.selectedChat.id,
+                    cryph: true,
+                    group: this.selectedChat.is_group
+                  }, { withCredentials: true })
+                  this.text = ''
+                  await this.reload_chat()
+              } catch (e) {
+                  this.errormsg = e.response?.data?.message || e.message
+              } finally {
+                  this.loading = false
+              }
+            },
             async sendkey(){
               if (!this.selectedChat) {
                 return
@@ -92,6 +120,7 @@
                   await api.post('/messages/initializing', {
                     chat_id: this.selectedChat.id
                   }, { withCredentials: true })
+                  await this.reload_chat()
               } catch (e) {
                   this.errormsg = e.response?.data?.message || e.message
               } finally {
@@ -205,7 +234,7 @@
              </div>
           </div>
 
-            <form @submit.prevent="sendMessage()">
+            <form @submit.prevent="handleSubmit()">
               <div class="p-3 border-top d-flex align-items-center gap-2">
                 <input
                   v-model="text"
@@ -213,6 +242,10 @@
                   class="form-control"
                   placeholder="Scrivi un messaggio..."
                 >
+                <div class="form-check">
+                  <input class="form-check-input" type="checkbox" id="altSend" v-model="useAltSend">
+                  <label class="form-check-label" for="altSend">cifra</label>
+                </div>
                 <button type="submit" class="btn btn-primary">Invia</button>
               </div>
             </form>

@@ -111,7 +111,7 @@ async def sign_up_verify(credentials: signupped, signup_session: str = Cookie(No
     except Exception as e:
         raise HTTPException(status_code=401, detail=f"Errore durante la verifica: {str(e)}")
     
-    pubblica, privata = genera_chiavi()
+    
 
 
     da_cifrare = {
@@ -120,8 +120,6 @@ async def sign_up_verify(credentials: signupped, signup_session: str = Cookie(No
         "api_hash": temp_data['api_hash'],
         "username": temp_data['username_not_cyphered'],
         "masterkey": temp_data['masterkey_derived'].decode() if isinstance(temp_data['masterkey_derived'], bytes) else temp_data['masterkey_derived'],
-        "pubblica": pubblica,
-        "privata": privata,
         "password": None,
         "session": session_str
     }
@@ -180,8 +178,7 @@ async def sign_up_verify_password(credentials: signupped_2fa, signup_session: st
 
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
-    
-    pubblica, privata = genera_chiavi()
+
 
 
     da_cifrare = {
@@ -190,8 +187,6 @@ async def sign_up_verify_password(credentials: signupped_2fa, signup_session: st
         "api_hash": temp_data['api_hash'],
         "username": temp_data['username_not_cyphered'],
         "masterkey": temp_data['masterkey_derived'].decode() if isinstance(temp_data['masterkey_derived'], bytes) else temp_data['masterkey_derived'],
-        "pubblica": pubblica,
-        "privata": privata,
         "password": credentials.password,
         "session": session_str
     }

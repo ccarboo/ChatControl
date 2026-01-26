@@ -7,7 +7,7 @@ import secrets
 from config import pepper
 import time
 import hashlib
-from utils import  is_logged_in, genera_chiave_simmetrica, cifra_messaggio_k, decifra_vault, cifra_con_age
+from utils import  is_logged_in, genera_chiave_simmetrica, cifra_messaggio_k, decifra_vault, cifra_con_age, genera_chiavi, cifra_vault
 import json
 from datetime import datetime
 
@@ -41,51 +41,59 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
         key = genera_chiave_simmetrica()
         text_cyp = cifra_messaggio_k(credentials.text, key)
         username = hashlib.sha256(pepper.encode() + data['data']['username'].encode()).hexdigest()
-        chat_id = hashlib.sha256(pepper.encode() + credentials.chat_id.encode()).hexdigest()
+        chat_id = hashlib.sha256(pepper.encode() + str(credentials.chat_id).encode()).hexdigest()
         if credentials.group:
-            #partecipants = await client.get_partecipants(credentials.chat_id)
-            #user_ids = [ hashlib.sha256(pepper.encode() + user.id.encode()).hexdigest() for user in partecipants]
-            
             try:
                 with get_connection() as conn:
                     cursor = conn.cursor()
-                    
                     cursor.execute(
                         """SELECT vault FROM contatti_gruppo WHERE proprietario = ? AND gruppo_id = ?""",
-                        (username,chat_id)
+                        (username, chat_id)
                     )
                     risultato = cursor.fetchone()
-                        
             except sqlite3.Error as error:
                 raise HTTPException(status_code=500, detail=str(error))
 
-            vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
-            
-            all_keys = []
-            if 'partecipanti' in vault_deciphered:
-                for participant_id, participant_data in vault_deciphered['partecipanti'].items():
-                    if 'chiavi' in participant_data:
-                        for chiave_info in participant_data['chiavi']:
-                            all_keys.append(chiave_info)
+            recipient_keys = []
+            if risultato and risultato[0]:
+                vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
+                all_keys = []
+                if 'partecipanti' in vault_deciphered:
+                    for participant_data in vault_deciphered['partecipanti'].values():
+                        if 'chiavi' in participant_data:
+                            all_keys.extend(participant_data['chiavi'])
+                for k in all_keys[:]:
+                    if k.get('fine') is not None:
+                        all_keys.remove(k)
+                recipient_keys = [k['chiave'] for k in all_keys if k.get('chiave')]
 
-            for key in all_keys[:]:
-                if key['fine'] is not None:
-                    all_keys.remove(key)
+            # Aggiungi sempre la chiave pubblica dell'utente loggato
+            user_pubblica = data['data']['chiave']['pubblica']
+            if user_pubblica and user_pubblica not in recipient_keys:
+                recipient_keys.append(user_pubblica)
             
+        
+            
+            if not recipient_keys:
+                raise HTTPException(status_code=400, detail="Nessuna chiave disponibile per cifrare")
 
-            key_ciphered = cifra_con_age(key.decode(), [k['chiave'] for k in all_keys if k.get('chiave')])
+            key_ciphered = cifra_con_age(key.decode(), recipient_keys)
+            
+            if key_ciphered is None:
+                raise HTTPException(status_code=500, detail="Errore durante la cifratura con age")
+            
             da_hashare ={
-                "CIF" : "on",
+                "cif" : "on",
                 "text" : text_cyp,
                 "key" : key_ciphered
             }
             json_da_hashare = json.dumps(da_hashare, sort_keys=True)
             mac = hashlib.sha256(json_da_hashare.encode()).hexdigest()
             finale = {
-                "CIF" : "on",
+                "cif" : "on",
                 "text" : text_cyp,
                 "key" : key_ciphered,
-                "MAC" : mac
+                "mac" : mac
             }
             
             try:
@@ -93,36 +101,44 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
             except Exception as e:
                 raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
         else:
-
-
             try:
                 with get_connection() as conn:
                     cursor = conn.cursor()
-                    
                     cursor.execute(
                         """SELECT vault FROM contatti WHERE proprietario = ? AND contatto_id = ?""",
-                        (username,chat_id)
+                        (username, chat_id)
                     )
                     risultato = cursor.fetchone()
-                        
             except sqlite3.Error as error:
                 raise HTTPException(status_code=500, detail=str(error))
 
-            vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
-            
-            all_keys = []
-            if 'chiavi' in vault_deciphered:
-                for chiave_info in vault_deciphered['chiavi']:
-                    all_keys.append(chiave_info)
-            
-            for key in all_keys[:]:
-                if key.get('fine') is not None:
-                    all_keys.remove(key)
-            
+            recipient_keys = []
+            if risultato and risultato[0]:
+                vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
+                all_keys = []
+                if 'chiavi' in vault_deciphered:
+                    all_keys.extend(vault_deciphered['chiavi'])
+                for k in all_keys[:]:
+                    if k.get('fine') is not None:
+                        all_keys.remove(k)
+                recipient_keys = [k['chiave'] for k in all_keys if k.get('chiave')]
 
-            key_ciphered = cifra_con_age(key.decode(), [k['chiave'] for k in all_keys if k.get('chiave')])
+            user_pubblica = data['data']['chiave']['pubblica']
+            if user_pubblica and user_pubblica not in recipient_keys:
+                recipient_keys.append(user_pubblica)
+            
+            
+            
+            if not recipient_keys:
+                raise HTTPException(status_code=400, detail="Nessuna chiave disponibile per cifrare")
+
+            key_ciphered = cifra_con_age(key.decode(), recipient_keys)
+            
+            if key_ciphered is None:
+                raise HTTPException(status_code=500, detail="Errore durante la cifratura con age")
+            
             da_hashare ={
-                "CIF" : "on",
+                "cif" : "on",
                 "text" : text_cyp,
                 "key" : key_ciphered
             }
@@ -130,10 +146,10 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
             json_da_hashare = json.dumps(da_hashare, sort_keys=True)
             mac = hashlib.sha256(json_da_hashare.encode()).hexdigest()
             finale = {
-                "CIF" : "on",
+                "cif" : "on",
                 "text" : text_cyp,
                 "key" : key_ciphered,
-                "MAC" : mac
+                "mac" : mac
             }
             
             try:
@@ -149,13 +165,58 @@ async def send_public_key(credentials: iniz, login_session: str = Cookie(None)):
 
     if not client.is_connected():
         await client.connect()
+
+    chiave_corrente = None
+
     
-    if 'pubblica' not in data['data']:
-        raise HTTPException(status_code=400, detail="Chiave pubblica non trovata nei dati utente")
+    if 'chiave' in data['data']:
+        chiave_corrente = data['data'].get('chiave', {})
+        inizio_corrente = chiave_corrente.get('inizio', 0)
+    
+        if time.time() - inizio_corrente < 86400:
+            raise HTTPException(status_code=409, detail="Aspetta più tempo per generare un'altra chiave")
+
+
+
+    pubblica, privata = genera_chiavi()
+    chiave_nuova = {
+        "pubblica": pubblica,
+        "privata": privata,
+        "inizio": time.time(),
+    }
+
+    
+    chiavi_lista = []
+    
+    
+    if chiave_corrente and chiave_corrente.get('pubblica'):
+        chiave_corrente['fine'] = time.time() - 1
+        chiavi_lista.append(chiave_corrente)
+    
+    
+    chiavi_precedenti = data['data'].get('chiavi', [])
+    chiavi_lista.extend(chiavi_precedenti)
+    
+    data['data']['chiave'] = chiave_nuova
+    data['data']['chiavi'] = chiavi_lista
+
+    username = hashlib.sha256(pepper.encode() + data['data']['username'].encode()).hexdigest()
+    vault_cifrato = cifra_vault(data['data'], data['data']['masterkey'])
+    
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE utenti SET vault = ? WHERE username = ?""",
+                (vault_cifrato, username)
+            )
+            conn.commit()
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=500, detail=str(error))
 
     message_payload = {
         "cif": "in",
-        "public": data['data']['pubblica']
+        "public": pubblica
     }
     
     try:
@@ -163,5 +224,6 @@ async def send_public_key(credentials: iniz, login_session: str = Cookie(None)):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
     
+    print(data)
     return {"status": "ok"}
 

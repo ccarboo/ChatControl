@@ -77,6 +77,8 @@ async def get_chats(login_session: str = Cookie(None), offset_date: str = None):
 @router.get("/chats/{chat_id}")
 async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = Cookie(None)):
     data = is_logged_in(login_session)
+    chat_id_cif = hashlib.sha256(pepper.encode() + str(chat_id).encode()).hexdigest()
+
     client = data['client']
     username = hashlib.sha256(pepper.encode() + data['data']['username'].encode()).hexdigest()
     if not client.is_connected():
@@ -142,7 +144,7 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                             cursor = conn.cursor()
                             cursor.execute(
                                 """SELECT vault FROM contatti_gruppo WHERE proprietario = ? AND gruppo_id = ?""",
-                                (username, chat_id)
+                                (username, chat_id_cif)
                             )
                             risultato = cursor.fetchone()
                             if not risultato or not risultato[0]:
@@ -171,7 +173,7 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                             cursor = conn.cursor()
                             cursor.execute(
                                 """SELECT vault FROM contatti WHERE proprietario = ? AND contatto_id = ?""",
-                                (username, chat_id)
+                                (username, chat_id_cif)
                             )
                             risultato = cursor.fetchone()
                             if not risultato or not risultato[0]:
@@ -231,23 +233,23 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                                 if insert_new_vault:
                                     cursor.execute(
                                         """INSERT INTO contatti_gruppo (proprietario, gruppo_id, vault) VALUES (?, ?, ?)""",
-                                        (username, chat_id, vault_cifrato)
+                                        (username, chat_id_cif, vault_cifrato)
                                     )
                                 else:
                                     cursor.execute(
                                         """UPDATE contatti_gruppo SET vault = ? WHERE proprietario = ? AND gruppo_id = ?""",
-                                        (vault_cifrato, username, chat_id)
+                                        (vault_cifrato, username, chat_id_cif)
                                     )
                             else:
                                 if insert_new_vault:
                                     cursor.execute(
                                         """INSERT INTO contatti (proprietario, contatto_id, vault) VALUES (?, ?, ?)""",
-                                        (username, chat_id, vault_cifrato)
+                                        (username, chat_id_cif, vault_cifrato)
                                     )
                                 else:
                                     cursor.execute(
                                         """UPDATE contatti SET vault = ? WHERE proprietario = ? AND contatto_id = ?""",
-                                        (vault_cifrato, username, chat_id)
+                                        (vault_cifrato, username, chat_id_cif)
                                     )
                             conn.commit()
                     except sqlite3.Error as error:
@@ -262,6 +264,7 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
 async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
     data = is_logged_in(login_session)
     client = data['client']
+    chat_id_cif = hashlib.sha256(pepper.encode() + str(chat_id).encode()).hexdigest()
     username = hashlib.sha256(pepper.encode() + data['data']['username'].encode()).hexdigest()
     
     if not client.is_connected():
@@ -273,8 +276,14 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
     except Exception:
         raise HTTPException(status_code=404, detail="Chat non trovata.")
 
+    me = await client.get_me()
+    my_id = me.id if me else None
+
     init_messages = []
     async for msg in client.iter_messages(entity, search='"cif":"in"'):
+        if my_id and msg.sender_id == my_id:
+            continue
+
         text = msg.message or ''
         try:
             parsed = json.loads(text)
@@ -306,7 +315,7 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
                 cursor = conn.cursor()
                 cursor.execute(
                     """SELECT vault FROM contatti_gruppo WHERE proprietario = ? AND gruppo_id = ?""",
-                    (username, chat_id)
+                    (username, chat_id_cif)
                 )
                 risultato = cursor.fetchone()
                 if not risultato or not risultato[0]:
@@ -323,7 +332,7 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
                 cursor = conn.cursor()
                 cursor.execute(
                     """SELECT vault FROM contatti WHERE proprietario = ? AND contatto_id = ?""",
-                    (username, chat_id)
+                    (username, chat_id_cif)
                 )
                 risultato = cursor.fetchone()
                 if not risultato or not risultato[0]:
@@ -389,23 +398,23 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
                     if insert_new_vault:
                         cursor.execute(
                             """INSERT INTO contatti_gruppo (proprietario, gruppo_id, vault) VALUES (?, ?, ?)""",
-                            (username, chat_id, vault_cifrato)
+                            (username, chat_id_cif, vault_cifrato)
                         )
                     else:
                         cursor.execute(
                             """UPDATE contatti_gruppo SET vault = ? WHERE proprietario = ? AND gruppo_id = ?""",
-                            (vault_cifrato, username, chat_id)
+                            (vault_cifrato, username, chat_id_cif)
                         )
                 else:
                     if insert_new_vault:
                         cursor.execute(
                             """INSERT INTO contatti (proprietario, contatto_id, vault) VALUES (?, ?, ?)""",
-                            (username, chat_id, vault_cifrato)
+                            (username, chat_id_cif, vault_cifrato)
                         )
                     else:
                         cursor.execute(
                             """UPDATE contatti SET vault = ? WHERE proprietario = ? AND contatto_id = ?""",
-                            (vault_cifrato, username, chat_id)
+                            (vault_cifrato, username, chat_id_cif)
                         )
                 conn.commit()
         except sqlite3.Error as error:
