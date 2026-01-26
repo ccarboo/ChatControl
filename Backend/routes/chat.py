@@ -7,10 +7,13 @@ import secrets
 from config import pepper
 import time
 import hashlib
-from utils import deriva_master_key, decifra_vault, cipher, login_cache, cifra_vault, is_logged_in, is_valid_age_public_key
+from utils import deriva_master_key, decifra_vault, cipher, login_cache, cifra_vault, is_logged_in, is_valid_age_public_key, decifra_messaggio_k
 from datetime import datetime
 import json
-
+import base64
+import subprocess
+import tempfile
+                                
 router = APIRouter()
 
 
@@ -107,13 +110,8 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
 
     messages.reverse()  
 
-    # Try to interpret message text as JSON payload without breaking UI
     for message in messages:
-        # Evita di processare messaggi inviati dall'utente loggato
-        if my_id and message.get('sender_id') == my_id:
-            message['is_json'] = False
-            continue
-
+        
         text = message.get('text') or ''
         try:
             parsed = json.loads(text)
@@ -126,13 +124,15 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
         if message['is_json'] == True:
             cif_flag = message['json'].get('CIF') or message['json'].get('cif')
             if cif_flag == "in":
+                if my_id and message.get('sender_id') == my_id:
+                    message['is_json'] = False
+                    continue
                 pubblic = message['json'].get('public')
                 if pubblic is None or not is_valid_age_public_key(pubblic):
                     continue
                 vault_deciphered = None
                 all_keys = []
                 insert_new_vault = False
-                # Telethon User non espone is_group: calcola in modo sicuro
                 is_group = bool(
                     getattr(entity, 'is_group', False)
                     or getattr(entity, 'megagroup', False)
@@ -148,7 +148,6 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                             )
                             risultato = cursor.fetchone()
                             if not risultato or not risultato[0]:
-                                # Crea struttura per gruppo nuovo con i campi richiesti
                                 vault_deciphered = {
                                     'gruppo_id': chat_id,
                                     'gruppo_nome': getattr(entity, 'title', 'Gruppo'),
@@ -158,7 +157,6 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                             else:
                                 vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
 
-                            # Estrai tutte le chiavi in una lista
                             if 'partecipanti' in vault_deciphered:
                                 for participant_id, participant_data in vault_deciphered['partecipanti'].items():
                                     if 'chiavi' in participant_data:
@@ -177,7 +175,6 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                             )
                             risultato = cursor.fetchone()
                             if not risultato or not risultato[0]:
-                                # Crea struttura per contatto nuovo con i campi richiesti
                                 sender = await msg.get_sender()
                                 vault_deciphered = {
                                     'user_id': chat_id,
@@ -188,12 +185,10 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                             else:
                                 vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
 
-                            # Estrai tutte le chiavi dalla struttura con i campi richiesti
                             if 'chiavi' in vault_deciphered:
                                 for chiave_info in vault_deciphered['chiavi']:
                                     all_keys.append(chiave_info)
 
-                            # Rimuovi chiavi scadute (fine != None)
                             for key in all_keys[:]:
                                 if key.get('fine') is not None:
                                     all_keys.remove(key)
@@ -201,7 +196,6 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                     raise HTTPException(status_code=500, detail=str(error))
 
                 if pubblic not in [k['chiave'] for k in all_keys]:
-                    # Scade eventuali chiavi attive (fine == None) e aggiunge la nuova chiave
                     expire_ts = time.time() - 1
                     new_key = {
                         'chiave': pubblic,
@@ -217,14 +211,12 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                                     chiave_info['fine'] = expire_ts
                             chiavi_list.append(new_key)
                     else:
-                        # Aggiorna la chiave nel contatto (struttura piatta)
                         chiavi_list = vault_deciphered.get('chiavi', [])
                         for chiave_info in chiavi_list:
                             if chiave_info.get('fine') is None:
                                 chiave_info['fine'] = expire_ts
                         chiavi_list.append(new_key)
 
-                    # Salva il vault aggiornato
                     vault_cifrato = cifra_vault(vault_deciphered, data['data']['masterkey'])
                     try:
                         with get_connection() as conn:
@@ -255,7 +247,85 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                     except sqlite3.Error as error:
                         raise HTTPException(status_code=500, detail=str(error))
                     
+            if cif_flag == "on":
+                text = message['json'].get('text')
+                key = message['json'].get('key')
+                mac = message['json'].get('mac')
 
+                ricostruito = {
+                    "cif":"on",
+                    "text":text,
+                    "key":key
+                }
+
+                json_ricostruito = json.dumps(ricostruito, sort_keys=True)
+                mac_calc = hashlib.sha256(json_ricostruito.encode()).hexdigest()
+                timestamp = message.get('date')
+                
+
+                if mac == mac_calc:
+                    timestamp_unix = timestamp.timestamp() if timestamp else None
+                    chiave_valida = None
+                    
+                    if timestamp_unix:
+                        chiave_corrente = data['data'].get('chiave', {})
+                        inizio_corrente = chiave_corrente.get('inizio', 0)
+                        
+                        if timestamp_unix >= inizio_corrente:
+                            chiave_valida = chiave_corrente
+                        else:
+                            chiavi_storiche = data['data'].get('chiavi', [])
+                            for chiave_storica in chiavi_storiche:
+                                inizio = chiave_storica.get('inizio', 0)
+                                fine = chiave_storica.get('fine')
+                                
+                                if fine is None:
+                                    if timestamp_unix >= inizio:
+                                        chiave_valida = chiave_storica
+                                        break
+                                else:
+                                    if inizio <= timestamp_unix <= fine:
+                                        chiave_valida = chiave_storica
+                                        break
+                    
+                    
+                    if chiave_valida and chiave_valida.get('privata'):
+                        try:
+                           
+                            chiave_privata = chiave_valida.get('privata')
+                            
+                            if chiave_privata:
+                                key_cifrato_bytes = base64.b64decode(key)
+                            
+                                
+                                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
+                                    keyfile.write(chiave_privata)
+                                    keyfile_path = keyfile.name
+                                
+                                try:
+                                    result = subprocess.run(
+                                        ['age', '-d', '-i', keyfile_path],
+                                        input=key_cifrato_bytes,
+                                        capture_output=True,
+                                        check=True
+                                    )
+                                    key_decifrato = result.stdout.decode()
+                                finally:
+                                    import os
+                                    os.unlink(keyfile_path)
+                                
+                                
+                                text_decifrato = decifra_messaggio_k(text, key_decifrato)
+                                print(f"DEBUG: Testo decifrato: {text_decifrato[:50] if len(text_decifrato) > 50 else text_decifrato}")
+                                message['text'] = text_decifrato
+                                
+                                if 'json' in message:
+                                    del message['json']
+                                message['is_json'] = False
+                        except Exception as e:
+                            print(f"Errore decifratura: {e}")
+                            import traceback
+                            traceback.print_exc()
                 
 
     return {"chat_id": chat_id, "messages": messages}

@@ -67,7 +67,6 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
                         all_keys.remove(k)
                 recipient_keys = [k['chiave'] for k in all_keys if k.get('chiave')]
 
-            # Aggiungi sempre la chiave pubblica dell'utente loggato
             user_pubblica = data['data']['chiave']['pubblica']
             if user_pubblica and user_pubblica not in recipient_keys:
                 recipient_keys.append(user_pubblica)

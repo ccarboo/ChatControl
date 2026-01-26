@@ -57,12 +57,12 @@ def cifra_con_age(plaintext: str, public_keys: list):
         for key in public_keys:
             args.extend(['-r', key])
         
-        # Esegui age
-        result = subprocess.run(args, input=plaintext, capture_output=True, text=True, check=True)
+        # Esegui age con input/output binario
+        result = subprocess.run(args, input=plaintext.encode(), capture_output=True, check=True)
         ciphertext = result.stdout
         
         # Converti in base64 per trasmissione sicura
-        return base64.b64encode(ciphertext.encode()).decode()
+        return base64.b64encode(ciphertext).decode()
     except subprocess.CalledProcessError as e:
         print(f"Errore cifratura age: {e.stderr}")
         return None
