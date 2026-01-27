@@ -8,6 +8,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
   plugins: [vue()],
+  define: {
+    __API_URL__: JSON.stringify('https://192.168.1.228:8000')
+  },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src')
@@ -18,7 +21,7 @@ export default defineConfig({
       key: fs.readFileSync(path.resolve(__dirname, './certs/key.pem')),
       cert: fs.readFileSync(path.resolve(__dirname, './certs/cert.pem')),
     },
-    host: 'localhost',
+    host: '0.0.0.0',
     port: 5173,
   }
 })

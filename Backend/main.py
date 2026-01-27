@@ -12,7 +12,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://localhost:5173"],  # URL del frontend Vite
+    allow_origins=["https://localhost:5173", "https://192.168.1.228:5173"],  # URL del frontend Vite + IP locale
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
