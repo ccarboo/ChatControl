@@ -268,7 +268,6 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                     chats_data = data['data'].get('chats', {})
                     chat_keys = chats_data.get(chat_id_cif, {})
 
-                    # Costruisci la lista di chiavi candidate: stima dal timestamp, poi backup
                     candidate_privates = []
 
                     chiave_corrente = chat_keys.get('chiave', {})
@@ -279,7 +278,6 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                         reverse=True
                     )
 
-                    # Se disponibile un timestamp, prova a trovare la chiave esatta tramite il tempo
                     if timestamp_unix:
                         inizio_corrente = chiave_corrente.get('inizio', 0)
                         if timestamp_unix >= inizio_corrente:
@@ -296,23 +294,19 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                                     chiave_stimata = chiave_storica
                                     break
                         
-                        # Prova la chiave stimata, poi al massimo la precedente
                         if chiave_stimata and chiave_stimata.get('privata'):
                             candidate_privates.append(chiave_stimata.get('privata'))
                         
-                        # Aggiungi come backup solo la chiave precedente se diversa dalla stimata
                         if chiavi_storiche_sorted:
                             chiave_precedente = chiavi_storiche_sorted[0]
                             if chiave_precedente.get('privata') and chiave_precedente.get('privata') != (chiave_stimata.get('privata') if chiave_stimata else None):
                                 candidate_privates.append(chiave_precedente.get('privata'))
                     else:
-                        # Se non abbiamo timestamp, prova la corrente e poi la precedente
                         if chiave_corrente.get('privata'):
                             candidate_privates.append(chiave_corrente.get('privata'))
                         if chiavi_storiche_sorted and chiavi_storiche_sorted[0].get('privata'):
                             candidate_privates.append(chiavi_storiche_sorted[0].get('privata'))
 
-                    # Prova a decifrare la chiave simmetrica con ciascuna identity finché una funziona
                     key_cifrato_bytes = None
                     try:
                         key_cifrato_bytes = base64.b64decode(key)
@@ -334,13 +328,11 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                                         check=True
                                     )
                                     key_decifrato = result.stdout.decode()
-                                    # Se siamo qui, questa privata ha funzionato
                                     break
                                 finally:
                                     import os
                                     os.unlink(keyfile_path)
                             except Exception:
-                                # Continua a provare con le altre chiavi
                                 continue
 
                         if key_decifrato:
@@ -473,13 +465,11 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
                 if sender_id not in vault_deciphered['partecipanti']:
                     vault_deciphered['partecipanti'][sender_id] = {'chiavi': []}
                 
-                # Aggiorna la fine della chiave precedente
                 if vault_deciphered['partecipanti'][sender_id]['chiavi']:
                     vault_deciphered['partecipanti'][sender_id]['chiavi'][-1]['fine'] = new_key_timestamp - 1
                 
                 vault_deciphered['partecipanti'][sender_id]['chiavi'].append(new_key)
             else:
-                # Aggiorna la fine della chiave precedente
                 if vault_deciphered['chiavi']:
                     vault_deciphered['chiavi'][-1]['fine'] = new_key_timestamp - 1
                 
