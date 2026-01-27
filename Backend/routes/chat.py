@@ -379,7 +379,7 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
     my_id = me.id if me else None
 
     init_messages = []
-    async for msg in client.iter_messages(entity, search='"cif":"in"'):
+    async for msg in client.iter_messages(entity, search='"cif":"in"', limit=None):
         if my_id and msg.sender_id == my_id:
             continue
 
