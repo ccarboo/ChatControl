@@ -1,15 +1,13 @@
-from fastapi import APIRouter, Response, Cookie
+from fastapi import APIRouter, Cookie
 import sqlite3
 from fastapi import HTTPException
 from pydantic import BaseModel
 from database.sqlite import get_connection
-import secrets
 from config import pepper
 import time
 import hashlib
 from utils import  is_logged_in, genera_chiave_simmetrica, cifra_messaggio_k, decifra_vault, cifra_con_age, genera_chiavi, cifra_vault
 import json
-from datetime import datetime
 
 router = APIRouter()
 
@@ -78,9 +76,7 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
                     user_pubblica = chat_data['chiave']['pubblica']
                     if user_pubblica and user_pubblica not in recipient_keys:
                         recipient_keys.append(user_pubblica)
-            
-            print(f"DEBUG send group: chat_id={credentials.chat_id} recipient_keys={recipient_keys} vault_participants={list(vault_deciphered.get('partecipanti', {}).keys()) if risultato and risultato[0] else 'no_vault'}")
-            
+                        
             if not recipient_keys:
                 raise HTTPException(status_code=400, detail="Nessuna chiave disponibile per cifrare")
 
@@ -232,6 +228,5 @@ async def send_public_key(credentials: iniz, login_session: str = Cookie(None)):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
     
-    print(data)
     return {"status": "ok"}
 

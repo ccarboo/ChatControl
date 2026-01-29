@@ -12,7 +12,7 @@ from config import pepper
 from config import secret_key
 import hashlib
 import time
-from utils import deriva_master_key, cifra_vault, genera_chiavi, login_cache
+from utils import deriva_master_key, cifra_vault, login_cache
 
 router = APIRouter()
 

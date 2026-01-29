@@ -1,13 +1,12 @@
-from fastapi import APIRouter, Response, Cookie
+from fastapi import APIRouter, Cookie
 import sqlite3
 from fastapi import HTTPException
 from pydantic import BaseModel
 from database.sqlite import get_connection
-import secrets
 from config import pepper
 import time
 import hashlib
-from utils import deriva_master_key, decifra_vault, cipher, login_cache, cifra_vault, is_logged_in, is_valid_age_public_key, decifra_messaggio_k
+from utils import decifra_vault, cifra_vault, is_logged_in, is_valid_age_public_key, decifra_messaggio_k
 from datetime import datetime
 import json
 import base64
@@ -285,7 +284,7 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                     chat_keys = chats_data.get(chat_id_cif, {})
 
                     candidate_privates = []
-
+                    
                     chiave_corrente = chat_keys.get('chiave', {})
                     chiavi_storiche = chat_keys.get('chiavi', [])
                     chiavi_storiche_sorted = sorted(

@@ -57,7 +57,6 @@
                   response = await api.get(`/chats/${chat.id}`, { withCredentials: true })
                   console.log('messaggi ricevuti:', response.data)
                   this.messaggi = response.data.messages
-                  this.scrollToBottom()
               } catch (e) {
                   this.errormsg = e.response?.data?.message || e.message
               } finally {
