@@ -17,6 +17,13 @@ import tempfile
 router = APIRouter()
 
 
+def is_group_chat_id(chat_id: int) -> bool:
+    try:
+        return int(chat_id) < 0
+    except Exception:
+        return False
+
+
 @router.get("/chats")
 async def get_chats(login_session: str = Cookie(None), offset_date: str = None):
     
@@ -134,11 +141,7 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                 vault_deciphered = None
                 all_keys = []
                 insert_new_vault = False
-                is_group = bool(
-                    getattr(entity, 'is_group', False)
-                    or getattr(entity, 'megagroup', False)
-                    or getattr(entity, 'gigagroup', False)
-                )
+                is_group = is_group_chat_id(chat_id)
                 try:
                     if is_group:
                         with get_connection() as conn:
@@ -160,12 +163,17 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
 
                             if 'partecipanti' in vault_deciphered:
                                 for participant_id, participant_data in vault_deciphered['partecipanti'].items():
+                                    # Aggiungi chiave corrente
+                                    current_key = participant_data.get('chiave', {})
+                                    if current_key and current_key.get('chiave'):
+                                        all_keys.append(current_key)
+                                    # Aggiungi chiavi storiche
                                     if 'chiavi' in participant_data:
                                         for chiave_info in participant_data['chiavi']:
                                             all_keys.append(chiave_info)
 
                             for key in all_keys[:]:
-                                if key['fine'] is not None:
+                                if key.get('fine') is not None:
                                     all_keys.remove(key)
                     else:
                         with get_connection() as conn:
@@ -197,25 +205,33 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                     raise HTTPException(status_code=500, detail=str(error))
 
                 if pubblic not in [k['chiave'] for k in all_keys]:
-                    expire_ts = time.time() - 1
+                    new_key_timestamp = time.time()
                     new_key = {
                         'chiave': pubblic,
-                        'inizio': time.time(),
+                        'inizio': new_key_timestamp,
                         'fine': None
                     }
 
                     if is_group:
-                        for participant_data in vault_deciphered.get('partecipanti', {}).values():
-                            chiavi_list = participant_data.get('chiavi', [])
-                            for chiave_info in chiavi_list:
-                                if chiave_info.get('fine') is None:
-                                    chiave_info['fine'] = expire_ts
-                            chiavi_list.append(new_key)
+                        sender_id = str(message.get('sender_id'))
+                        if sender_id not in vault_deciphered['partecipanti']:
+                            vault_deciphered['partecipanti'][sender_id] = {'chiave': {}, 'chiavi': []}
+                        
+                        # Sposta la chiave corrente nello storico
+                        current_key = vault_deciphered['partecipanti'][sender_id].get('chiave', {})
+                        if current_key and current_key.get('chiave'):
+                            current_key['fine'] = new_key_timestamp - 1
+                            if 'chiavi' not in vault_deciphered['partecipanti'][sender_id]:
+                                vault_deciphered['partecipanti'][sender_id]['chiavi'] = []
+                            vault_deciphered['partecipanti'][sender_id]['chiavi'].append(current_key)
+                        
+                        # Imposta la nuova chiave come corrente
+                        vault_deciphered['partecipanti'][sender_id]['chiave'] = new_key
                     else:
                         chiavi_list = vault_deciphered.get('chiavi', [])
                         for chiave_info in chiavi_list:
                             if chiave_info.get('fine') is None:
-                                chiave_info['fine'] = expire_ts
+                                chiave_info['fine'] = new_key_timestamp - 1
                         chiavi_list.append(new_key)
 
                     vault_cifrato = cifra_vault(vault_deciphered, data['data']['masterkey'])
@@ -338,17 +354,14 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                         if key_decifrato:
                             try:
                                 text_decifrato = decifra_messaggio_k(text, key_decifrato)
-                                print(f"DEBUG: Testo decifrato: {text_decifrato[:50] if len(text_decifrato) > 50 else text_decifrato}")
                                 message['text'] = text_decifrato
                                 if 'json' in message:
                                     del message['json']
                                 message['is_json'] = False
                             except Exception as e:
-                                print(f"Errore decifratura contenuto: {e}")
                                 import traceback
                                 traceback.print_exc()
                 
-    print(data)
     return {"chat_id": chat_id, "messages": messages}
 
 @router.get("/chats/{chat_id}/inits")
@@ -371,7 +384,8 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
     my_id = me.id if me else None
 
     init_messages = []
-    async for msg in client.iter_messages(entity, search='"cif":"in"', limit=None):
+    
+    async for msg in client.iter_messages(entity, search='"cif": "in"', limit=None):
         if my_id and msg.sender_id == my_id:
             continue
 
@@ -380,6 +394,8 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
             parsed = json.loads(text)
             cif_flag = parsed.get('CIF') or parsed.get('cif')
             pubblic = parsed.get('public')
+
+            
 
             if cif_flag == "in" and pubblic is not None and is_valid_age_public_key(pubblic):
                 init_messages.append({
@@ -391,12 +407,7 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
         except Exception:
             continue
 
-    is_group = bool(
-        getattr(entity, 'is_group', False)
-        or getattr(entity, 'megagroup', False)
-        or getattr(entity, 'gigagroup', False)
-    )
-
+    is_group = is_group_chat_id(chat_id)
     vault_deciphered = None
     insert_new_vault = False
     
@@ -442,6 +453,11 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
     all_keys = []
     if is_group and 'partecipanti' in vault_deciphered:
         for participant_data in vault_deciphered['partecipanti'].values():
+            # Aggiungi chiave corrente
+            current_key = participant_data.get('chiave', {})
+            if current_key and current_key.get('chiave'):
+                all_keys.append(current_key)
+            # Aggiungi chiavi storiche
             if 'chiavi' in participant_data:
                 all_keys.extend(participant_data['chiavi'])
     elif not is_group and 'chiavi' in vault_deciphered:
@@ -463,12 +479,18 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
             if is_group:
                 sender_id = str(init_msg['sender_id'])
                 if sender_id not in vault_deciphered['partecipanti']:
-                    vault_deciphered['partecipanti'][sender_id] = {'chiavi': []}
+                    vault_deciphered['partecipanti'][sender_id] = {'chiave': {}, 'chiavi': []}
                 
-                if vault_deciphered['partecipanti'][sender_id]['chiavi']:
-                    vault_deciphered['partecipanti'][sender_id]['chiavi'][-1]['fine'] = new_key_timestamp - 1
+                # Sposta la chiave corrente nello storico
+                current_key = vault_deciphered['partecipanti'][sender_id].get('chiave', {})
+                if current_key and current_key.get('chiave'):
+                    current_key['fine'] = new_key_timestamp - 1
+                    if 'chiavi' not in vault_deciphered['partecipanti'][sender_id]:
+                        vault_deciphered['partecipanti'][sender_id]['chiavi'] = []
+                    vault_deciphered['partecipanti'][sender_id]['chiavi'].append(current_key)
                 
-                vault_deciphered['partecipanti'][sender_id]['chiavi'].append(new_key)
+                # Imposta la nuova chiave come corrente
+                vault_deciphered['partecipanti'][sender_id]['chiave'] = new_key
             else:
                 if vault_deciphered['chiavi']:
                     vault_deciphered['chiavi'][-1]['fine'] = new_key_timestamp - 1

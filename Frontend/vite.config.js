@@ -9,7 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export default defineConfig({
   plugins: [vue()],
   define: {
-    __API_URL__: JSON.stringify('https://192.168.1.228:8000')
+    __API_URL__: JSON.stringify('https://server.apernici.it')
   },
   resolve: {
     alias: {
@@ -23,6 +23,14 @@ export default defineConfig({
     },
     host: '0.0.0.0',
     port: 5173,
+    proxy: {
+      '/api': {
+        target: 'https://localhost:8000',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api/, '')
+      }
+    }
   }
 })
 

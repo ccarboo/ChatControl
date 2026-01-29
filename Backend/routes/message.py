@@ -60,6 +60,11 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
                 all_keys = []
                 if 'partecipanti' in vault_deciphered:
                     for participant_data in vault_deciphered['partecipanti'].values():
+                        # Aggiungi chiave corrente
+                        current_key = participant_data.get('chiave', {})
+                        if current_key and current_key.get('chiave'):
+                            all_keys.append(current_key)
+                        # Aggiungi chiavi storiche
                         if 'chiavi' in participant_data:
                             all_keys.extend(participant_data['chiavi'])
                 for k in all_keys[:]:
@@ -73,6 +78,8 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
                     user_pubblica = chat_data['chiave']['pubblica']
                     if user_pubblica and user_pubblica not in recipient_keys:
                         recipient_keys.append(user_pubblica)
+            
+            print(f"DEBUG send group: chat_id={credentials.chat_id} recipient_keys={recipient_keys} vault_participants={list(vault_deciphered.get('partecipanti', {}).keys()) if risultato and risultato[0] else 'no_vault'}")
             
             if not recipient_keys:
                 raise HTTPException(status_code=400, detail="Nessuna chiave disponibile per cifrare")
@@ -216,8 +223,8 @@ async def send_public_key(credentials: iniz, login_session: str = Cookie(None)):
         raise HTTPException(status_code=500, detail=str(error))
 
     message_payload = {
-        "cif": "in",
-        "public": pubblica
+        "cif":"in",
+        "public":pubblica
     }
     
     try:
