@@ -8,6 +8,13 @@ import time
 import hashlib
 from utils import  is_logged_in, genera_chiave_simmetrica, cifra_messaggio_k, decifra_vault, cifra_con_age, genera_chiavi, cifra_vault
 import json
+from fastapi import UploadFile, File, Form
+import subprocess
+import tempfile
+import shutil
+from telethon.tl.types import DocumentAttributeFilename
+import os
+
 
 router = APIRouter()
 
@@ -21,6 +28,53 @@ class iniz (BaseModel):
     chat_id: int
     
 
+
+
+@router.post("/messages/send/file")
+async def s_file(chat_id: int = Form(...), text: str = Form(""), cryph: bool = Form(False),group: bool = Form(False), file: UploadFile = File(...),login_session: str = Cookie(None)):
+    data = is_logged_in(login_session)
+    client = data['client']
+
+    if not client.is_connected():
+        await client.connect()
+
+    if not cryph:
+        try:
+            from telethon.tl.types import DocumentAttributeFilename
+            import os
+            ext = os.path.splitext(file.filename)[1]
+            with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                shutil.copyfileobj(file.file, tmp)
+                tmp_path = tmp.name
+                
+            await client.send_file(
+                chat_id,
+                tmp_path,
+                caption=text,
+                force_document=True,
+                attributes=[DocumentAttributeFilename(file.filename)]
+            )
+            os.remove(tmp_path)
+
+            return {"status":"ok"}
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
+
+    """encrypted_path = f"/dev/shm/{file.filename}.age"
+
+    
+    process = subprocess.Popen(
+        ["age", "-r", user['target_pub_key'], "-o", encrypted_path],
+        stdin=subprocess.PIPE
+    )
+
+    while chunk := await file.read(65536): # Legge 64KB alla volta
+        process.stdin.write(chunk)
+    
+    process.stdin.close()
+    process.wait()"""
+    
+    
 @router.post("/messages/send")
 async def s_message( credentials: message, login_session: str = Cookie(None)):
     data = is_logged_in(login_session)

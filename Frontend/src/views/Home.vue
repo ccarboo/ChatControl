@@ -7,6 +7,7 @@
                 loading: false,
                 some_data: null,
 
+                file: null,
                 chats: [],
                 selectedChat: null,
                 messaggi: [],
@@ -17,6 +18,13 @@
             }
         },
         methods: {
+            removeFile() {
+              this.file = null;
+              this.$refs.fileInput.value = '';
+            },
+            handleFileChange(event) {
+              this.file = event.target.files[0];
+            },
             async get_chats(){
               this.errormsg = null
               this.loading = true
@@ -64,11 +72,43 @@
               }
             },
             async sendMessage(){
-              if (!this.selectedChat || !this.text?.trim()) {
+              if (!this.selectedChat) {
                 return
               }
               this.loading = true
               try {
+                if(this.file && this.text){
+
+                  const formData = new FormData()
+                  formData.append('file',this.file)
+                  formData.append('text', this.text)
+                  formData.append('chat_id',this.selectedChat.id)
+                  formData.append('cryph',false)
+                  formData.append('group',this.selectedChat.is_group)
+
+                  await api.post('/messages/send/file', formData,
+                   { withCredentials: true , headers: { 'Content-Type': 'multipart/form-data' }})
+                  this.text = ''
+                  this.file = null
+                  this.$refs.fileInput.value = '';
+                  await this.reload_chat()
+
+                }
+                if(this.file && !this.text){
+                  const formData = new FormData()
+                  formData.append('file',this.file)
+                  formData.append('text', '')
+                  formData.append('chat_id',this.selectedChat.id)
+                  formData.append('cryph',false)
+                  formData.append('group',this.selectedChat.is_group)
+
+                  await api.post('/messages/send/file', formData,
+                   { withCredentials: true , headers: { 'Content-Type': 'multipart/form-data' }})
+                  this.text = ''
+                  this.file = null
+                  this.$refs.fileInput.value = '';
+                  await this.reload_chat()
+                }
                   await api.post('/messages/send', {
                     text: this.text,
                     chat_id: this.selectedChat.id,
@@ -245,12 +285,30 @@
                   <input class="form-check-input" type="checkbox" id="altSend" v-model="useAltSend">
                   <label class="form-check-label" for="altSend">cifra</label>
                 </div>
-                <button type="submit" class="btn btn-primary">Invia</button>
-              </div>
+                <button type="submit" class="btn btn-primary send-btn">
+                  <img 
+                    src="/send.svg"  
+                    alt="Invia"
+                    class="send-icon"
+                  >
+                </button>
+                <input
+                  ref="fileInput"
+                  type="file"
+                  style="display: none"
+                  @change="handleFileChange"
+                />
+                <button type="button" class="btn btn-primary send-btn" @click="$refs.fileInput.click()">
+                  <img src="/paperclip.svg" alt="Allega" class="send-icon" />
+                </button>
+                <button v-if="file" type="button" class="btn btn-danger" @click="removeFile">
+                  Rimuovi file
+                </button>
+              </div>  
             </form>
         </div>
 
-        <div v-else class="h-100 d-flex align-items-center justify-content-center bg-light text-muted">
+        <div v-else class="btn btn-primary h-100 d-flex align-items-center justify-content-center bg-light text-muted">
           Seleziona una chat per iniziare a messaggiare
         </div>
       </div>
@@ -338,6 +396,22 @@
 .overflow-auto::-webkit-scrollbar-thumb {
   background: #ccc;
   border-radius: 10px;
+}
+
+/* Bottone invio quadrato e icona centrata */
+.send-btn {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.send-icon {
+  width: 22px;
+  height: 22px;
+  display: block;
+  margin: auto;
 }
 
 </style>
