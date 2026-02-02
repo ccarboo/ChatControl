@@ -6,7 +6,7 @@ from database.sqlite import get_connection
 from config import pepper
 import time
 import hashlib
-from utils import  is_logged_in, genera_chiave_simmetrica, cifra_messaggio_k, decifra_vault, cifra_con_age, genera_chiavi, cifra_vault
+from utils import  is_logged_in, decifra_vault, cifra_con_age, genera_chiavi, cifra_vault
 import json
 from fastapi import UploadFile, File, Form
 import subprocess
@@ -46,7 +46,7 @@ async def s_file(chat_id: int = Form(...), text: str = Form(""), cryph: bool = F
             with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
                 shutil.copyfileobj(file.file, tmp)
                 tmp_path = tmp.name
-                
+
             await client.send_file(
                 chat_id,
                 tmp_path,
@@ -90,8 +90,6 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
             raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
         
     else:
-        key = genera_chiave_simmetrica()
-        text_cyp = cifra_messaggio_k(credentials.text, key)
         username = hashlib.sha256(pepper.encode() + data['data']['username'].encode()).hexdigest()
         chat_id = hashlib.sha256(pepper.encode() + str(credentials.chat_id).encode()).hexdigest()
         if credentials.group:
@@ -134,22 +132,20 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
             if not recipient_keys:
                 raise HTTPException(status_code=400, detail="Nessuna chiave disponibile per cifrare")
 
-            key_ciphered = cifra_con_age(key.decode(), recipient_keys)
+            text_cyp = cifra_con_age(credentials.text, recipient_keys)
             
-            if key_ciphered is None:
+            if text_cyp is None:
                 raise HTTPException(status_code=500, detail="Errore durante la cifratura con age")
             
             da_hashare ={
                 "cif" : "on",
                 "text" : text_cyp,
-                "key" : key_ciphered
             }
             json_da_hashare = json.dumps(da_hashare, sort_keys=True)
             mac = hashlib.sha256(json_da_hashare.encode()).hexdigest()
             finale = {
                 "cif" : "on",
                 "text" : text_cyp,
-                "key" : key_ciphered,
                 "mac" : mac
             }
             
@@ -190,15 +186,14 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
             if not recipient_keys:
                 raise HTTPException(status_code=400, detail="Nessuna chiave disponibile per cifrare")
 
-            key_ciphered = cifra_con_age(key.decode(), recipient_keys)
+            text_cyp = cifra_con_age(credentials.text, recipient_keys)
             
-            if key_ciphered is None:
+            if text_cyp is None:
                 raise HTTPException(status_code=500, detail="Errore durante la cifratura con age")
             
             da_hashare ={
                 "cif" : "on",
                 "text" : text_cyp,
-                "key" : key_ciphered
             }
 
             json_da_hashare = json.dumps(da_hashare, sort_keys=True)
@@ -206,7 +201,6 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
             finale = {
                 "cif" : "on",
                 "text" : text_cyp,
-                "key" : key_ciphered,
                 "mac" : mac
             }
             

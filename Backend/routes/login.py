@@ -61,7 +61,9 @@ async def login_user(credentials: login_user, response: Response):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     
-    
+    # Inizializza il campo chats se non esiste
+    if 'chats' not in vault_decyphered:
+        vault_decyphered['chats'] = {}
     
     client = TelegramClient(StringSession(vault_decyphered['session']), vault_decyphered['api_id'], vault_decyphered['api_hash'])
 

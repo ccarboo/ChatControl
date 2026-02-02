@@ -34,20 +34,6 @@ def decifra_vault(blob_cifrato, master_key):
     except Exception as e:
         raise ValueError(f"Errore nella decifrazione del vault: {str(e)}")
 
-def genera_chiave_simmetrica():
-    return Fernet.generate_key()
-
-def cifra_messaggio_k(testo: str, k):
-    if isinstance(k, str):
-        k = k.encode()
-    f = Fernet(k)
-    return f.encrypt(testo.encode()).decode()
-
-def decifra_messaggio_k(blob: str, k):
-    if isinstance(k, str):
-        k = k.encode()
-    f = Fernet(k)
-    return f.decrypt(blob.encode()).decode()
 
 def cifra_con_age(plaintext: str, public_keys: list):
     

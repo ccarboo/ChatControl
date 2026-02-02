@@ -6,7 +6,7 @@ from database.sqlite import get_connection
 from config import pepper
 import time
 import hashlib
-from utils import decifra_vault, cifra_vault, is_logged_in, is_valid_age_public_key, decifra_messaggio_k
+from utils import decifra_vault, cifra_vault, is_logged_in, is_valid_age_public_key
 from datetime import datetime
 import json
 import base64
@@ -265,13 +265,11 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                     
             if cif_flag == "on":
                 text = message['json'].get('text')
-                key = message['json'].get('key')
                 mac = message['json'].get('mac')
 
                 ricostruito = {
                     "cif": "on",
                     "text": text,
-                    "key": key
                 }
 
                 json_ricostruito = json.dumps(ricostruito, sort_keys=True)
@@ -322,44 +320,45 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                         if chiavi_storiche_sorted and chiavi_storiche_sorted[0].get('privata'):
                             candidate_privates.append(chiavi_storiche_sorted[0].get('privata'))
 
-                    key_cifrato_bytes = None
-                    try:
-                        key_cifrato_bytes = base64.b64decode(key)
-                    except Exception:
-                        key_cifrato_bytes = None
+                    text_decifrato = None
+                    
 
-                    if key_cifrato_bytes:
-                        key_decifrato = None
-                        for privata in candidate_privates:
+                    for privata in candidate_privates:
+                        try:
+                            
                             try:
-                                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
-                                    keyfile.write(privata)
-                                    keyfile_path = keyfile.name
-                                try:
-                                    result = subprocess.run(
-                                        ['age', '-d', '-i', keyfile_path],
-                                        input=key_cifrato_bytes,
-                                        capture_output=True,
-                                        check=True
-                                    )
-                                    key_decifrato = result.stdout.decode()
-                                    break
-                                finally:
-                                    import os
-                                    os.unlink(keyfile_path)
-                            except Exception:
-                                continue
+                                text_bytes = base64.b64decode(text)
+                            except:
+                                text_bytes = text.encode()
+                            
+                            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
+                                keyfile.write(privata)
+                                keyfile_path = keyfile.name
+                            try:
+                                result = subprocess.run(
+                                    ['age', '-d', '-i', keyfile_path],
+                                    input=text_bytes,
+                                    capture_output=True,
+                                    check=True
+                                )
+                                text_decifrato = result.stdout.decode()
+                                break
+                            finally:
+                                import os
+                                os.unlink(keyfile_path)
+                        except Exception as e:
+                            
+                            continue
 
-                        if key_decifrato:
-                            try:
-                                text_decifrato = decifra_messaggio_k(text, key_decifrato)
-                                message['text'] = text_decifrato
-                                if 'json' in message:
-                                    del message['json']
-                                message['is_json'] = False
-                            except Exception as e:
-                                import traceback
-                                traceback.print_exc()
+                    if text_decifrato:
+                        try:
+                            message['text'] = text_decifrato
+                            if 'json' in message:
+                                del message['json']
+                            message['is_json'] = False
+                        except Exception as e:
+                            import traceback
+                            traceback.print_exc()
                 
     return {"chat_id": chat_id, "messages": messages}
 
