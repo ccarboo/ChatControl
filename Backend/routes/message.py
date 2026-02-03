@@ -6,7 +6,7 @@ from database.sqlite import get_connection
 from config import pepper
 import time
 import hashlib
-from utils import  is_logged_in, decifra_vault, cifra_con_age, genera_chiavi, cifra_vault
+from utils import  is_logged_in, decifra_vault, cifra_con_age, genera_chiavi, cifra_vault, get_chat_chyper_keys, get_group_chyper_keys
 import json
 from fastapi import UploadFile, File, Form
 import subprocess
@@ -60,19 +60,30 @@ async def s_file(chat_id: int = Form(...), text: str = Form(""), cryph: bool = F
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
 
-    """encrypted_path = f"/dev/shm/{file.filename}.age"
+    else:
+        
+        if group:
+            recipient_keys = get_group_chyper_keys(data, chat_id)
 
-    
-    process = subprocess.Popen(
-        ["age", "-r", user['target_pub_key'], "-o", encrypted_path],
-        stdin=subprocess.PIPE
-    )
+            
 
-    while chunk := await file.read(65536): # Legge 64KB alla volta
-        process.stdin.write(chunk)
-    
-    process.stdin.close()
-    process.wait()"""
+        else:
+            recipient_keys = get_chat_chyper_keys(data, chat_id)
+            
+
+        '''encrypted_path = f"/dev/shm/{file.filename}.age"
+
+        
+        process = subprocess.Popen(
+            ["age", "-r", user['target_pub_key'], "-o", encrypted_path],
+            stdin=subprocess.PIPE
+        )
+
+        while chunk := await file.read(65536): # Legge 64KB alla volta
+            process.stdin.write(chunk)
+        
+        process.stdin.close()
+        process.wait()'''
     
     
 @router.post("/messages/send")
@@ -90,50 +101,10 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
             raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
         
     else:
-        username = hashlib.sha256(pepper.encode() + data['data']['username'].encode()).hexdigest()
-        chat_id = hashlib.sha256(pepper.encode() + str(credentials.chat_id).encode()).hexdigest()
         if credentials.group:
-            try:
-                with get_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """SELECT vault FROM contatti_gruppo WHERE proprietario = ? AND gruppo_id = ?""",
-                        (username, chat_id)
-                    )
-                    risultato = cursor.fetchone()
-            except sqlite3.Error as error:
-                raise HTTPException(status_code=500, detail=str(error))
-
-            recipient_keys = []
-            if risultato and risultato[0]:
-                vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
-                all_keys = []
-                if 'partecipanti' in vault_deciphered:
-                    for participant_data in vault_deciphered['partecipanti'].values():
-                        # Aggiungi chiave corrente
-                        current_key = participant_data.get('chiave', {})
-                        if current_key and current_key.get('chiave'):
-                            all_keys.append(current_key)
-                        # Aggiungi chiavi storiche
-                        if 'chiavi' in participant_data:
-                            all_keys.extend(participant_data['chiavi'])
-                for k in all_keys[:]:
-                    if k.get('fine') is not None:
-                        all_keys.remove(k)
-                recipient_keys = [k['chiave'] for k in all_keys if k.get('chiave')]
-
-            if 'chats' in data['data'] and chat_id in data['data']['chats']:
-                chat_data = data['data']['chats'][chat_id]
-                if 'chiave' in chat_data and 'pubblica' in chat_data['chiave']:
-                    user_pubblica = chat_data['chiave']['pubblica']
-                    if user_pubblica and user_pubblica not in recipient_keys:
-                        recipient_keys.append(user_pubblica)
-                        
-            if not recipient_keys:
-                raise HTTPException(status_code=400, detail="Nessuna chiave disponibile per cifrare")
-
             
-            
+            recipient_keys = get_group_chyper_keys(data, credentials.chat_id)
+
             da_cifrare ={
                 "cif" : "on",
                 "text" : credentials.text,
@@ -157,37 +128,8 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
             except Exception as e:
                 raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
         else:
-            try:
-                with get_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """SELECT vault FROM contatti WHERE proprietario = ? AND contatto_id = ?""",
-                        (username, chat_id)
-                    )
-                    risultato = cursor.fetchone()
-            except sqlite3.Error as error:
-                raise HTTPException(status_code=500, detail=str(error))
-
-            recipient_keys = []
-            if risultato and risultato[0]:
-                vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
-                all_keys = []
-                if 'chiavi' in vault_deciphered:
-                    all_keys.extend(vault_deciphered['chiavi'])
-                for k in all_keys[:]:
-                    if k.get('fine') is not None:
-                        all_keys.remove(k)
-                recipient_keys = [k['chiave'] for k in all_keys if k.get('chiave')]
-
-            if 'chats' in data['data'] and chat_id in data['data']['chats']:
-                chat_data = data['data']['chats'][chat_id]
-                if 'chiave' in chat_data and 'pubblica' in chat_data['chiave']:
-                    user_pubblica = chat_data['chiave']['pubblica']
-                    if user_pubblica and user_pubblica not in recipient_keys:
-                        recipient_keys.append(user_pubblica)
             
-            if not recipient_keys:
-                raise HTTPException(status_code=400, detail="Nessuna chiave disponibile per cifrare")
+            recipient_keys = get_chat_chyper_keys(data, credentials.chat_id)
 
             da_cifrare ={
                 "cif" : "on",

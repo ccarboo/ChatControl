@@ -8,6 +8,11 @@ from config import secret_key
 from fastapi import Cookie, HTTPException
 import time
 import re
+import sqlite3
+from database.sqlite import get_connection
+import hashlib
+from config import pepper
+
 
 SECRET_KEY = secret_key.encode()
 cipher = Fernet(SECRET_KEY)
@@ -33,7 +38,6 @@ def decifra_vault(blob_cifrato, master_key):
         return json.loads(json_data)
     except Exception as e:
         raise ValueError(f"Errore nella decifrazione del vault: {str(e)}")
-
 
 def cifra_con_age(plaintext: str, public_keys: list):
     
@@ -91,8 +95,93 @@ def is_logged_in(login_session: str = Cookie(None)):
 
     user_data['time'] = time.time()
     return user_data    
+
 def is_valid_age_public_key(key: str):
     pattern = r"^age1[0-9a-z]{58}$"
     if re.match(pattern, key):
         return True
     return False
+
+def get_group_chyper_keys(data, chat_id1):
+    username = hashlib.sha256(pepper.encode() + data['data']['username'].encode()).hexdigest()
+    chat_id = hashlib.sha256(pepper.encode() + str(chat_id1).encode()).hexdigest()
+    
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT vault FROM contatti_gruppo WHERE proprietario = ? AND gruppo_id = ?""",
+                (username, chat_id)
+            )
+            risultato = cursor.fetchone()
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=500, detail=str(error))
+
+    recipient_keys = []
+    if risultato and risultato[0]:
+        vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
+        all_keys = []
+        if 'partecipanti' in vault_deciphered:
+            for participant_data in vault_deciphered['partecipanti'].values():
+                # Aggiungi chiave corrente
+                current_key = participant_data.get('chiave', {})
+                if current_key and current_key.get('chiave'):
+                    all_keys.append(current_key)
+                # Aggiungi chiavi storiche
+                if 'chiavi' in participant_data:
+                    all_keys.extend(participant_data['chiavi'])
+        for k in all_keys[:]:
+            if k.get('fine') is not None:
+                all_keys.remove(k)
+        recipient_keys = [k['chiave'] for k in all_keys if k.get('chiave')]
+
+    if 'chats' in data['data'] and chat_id in data['data']['chats']:
+        chat_data = data['data']['chats'][chat_id]
+        if 'chiave' in chat_data and 'pubblica' in chat_data['chiave']:
+            user_pubblica = chat_data['chiave']['pubblica']
+            if user_pubblica and user_pubblica not in recipient_keys:
+                recipient_keys.append(user_pubblica)
+                
+    if not recipient_keys:
+        raise HTTPException(status_code=400, detail="Nessuna chiave disponibile per cifrare")
+    else:
+        return recipient_keys
+    
+def get_chat_chyper_keys(data, chat_id1):
+    username = hashlib.sha256(pepper.encode() + data['data']['username'].encode()).hexdigest()
+    chat_id = hashlib.sha256(pepper.encode() + str(chat_id1).encode()).hexdigest()
+
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """SELECT vault FROM contatti WHERE proprietario = ? AND contatto_id = ?""",
+                (username, chat_id)
+            )
+            risultato = cursor.fetchone()
+    except sqlite3.Error as error:
+        raise HTTPException(status_code=500, detail=str(error))
+
+    recipient_keys = []
+    if risultato and risultato[0]:
+        vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
+        all_keys = []
+        if 'chiavi' in vault_deciphered:
+            all_keys.extend(vault_deciphered['chiavi'])
+        for k in all_keys[:]:
+            if k.get('fine') is not None:
+                all_keys.remove(k)
+        recipient_keys = [k['chiave'] for k in all_keys if k.get('chiave')]
+
+    if 'chats' in data['data'] and chat_id in data['data']['chats']:
+        chat_data = data['data']['chats'][chat_id]
+        if 'chiave' in chat_data and 'pubblica' in chat_data['chiave']:
+            user_pubblica = chat_data['chiave']['pubblica']
+            if user_pubblica and user_pubblica not in recipient_keys:
+                recipient_keys.append(user_pubblica)
+    
+    if not recipient_keys:
+        raise HTTPException(status_code=400, detail="Nessuna chiave disponibile per cifrare")
+
+    else:
+        return recipient_keys
