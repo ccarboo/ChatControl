@@ -265,100 +265,93 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                     
             if cif_flag == "on":
                 text = message['json'].get('text')
-                mac = message['json'].get('mac')
-
-                ricostruito = {
-                    "cif": "on",
-                    "text": text,
-                }
-
-                json_ricostruito = json.dumps(ricostruito, sort_keys=True)
-                mac_calc = hashlib.sha256(json_ricostruito.encode()).hexdigest()
+   
                 timestamp = message.get('date')
 
-                if mac == mac_calc:
-                    timestamp_unix = timestamp.timestamp() if timestamp else None
-                    chats_data = data['data'].get('chats', {})
-                    chat_keys = chats_data.get(chat_id_cif, {})
+                timestamp_unix = timestamp.timestamp() if timestamp else None
+                chats_data = data['data'].get('chats', {})
+                chat_keys = chats_data.get(chat_id_cif, {})
 
-                    candidate_privates = []
-                    
-                    chiave_corrente = chat_keys.get('chiave', {})
-                    chiavi_storiche = chat_keys.get('chiavi', [])
-                    chiavi_storiche_sorted = sorted(
-                        [c for c in chiavi_storiche if c.get('privata')],
-                        key=lambda c: c.get('inizio', 0),
-                        reverse=True
-                    )
+                candidate_privates = []
+                
+                chiave_corrente = chat_keys.get('chiave', {})
+                chiavi_storiche = chat_keys.get('chiavi', [])
+                chiavi_storiche_sorted = sorted(
+                    [c for c in chiavi_storiche if c.get('privata')],
+                    key=lambda c: c.get('inizio', 0),
+                    reverse=True
+                )
 
-                    if timestamp_unix:
-                        inizio_corrente = chiave_corrente.get('inizio', 0)
-                        if timestamp_unix >= inizio_corrente:
-                            chiave_stimata = chiave_corrente
-                        else:
-                            chiave_stimata = None
-                            for chiave_storica in chiavi_storiche_sorted:
-                                inizio = chiave_storica.get('inizio', 0)
-                                fine = chiave_storica.get('fine')
-                                if fine is None and timestamp_unix >= inizio:
-                                    chiave_stimata = chiave_storica
-                                    break
-                                elif fine is not None and inizio <= timestamp_unix <= fine:
-                                    chiave_stimata = chiave_storica
-                                    break
-                        
-                        if chiave_stimata and chiave_stimata.get('privata'):
-                            candidate_privates.append(chiave_stimata.get('privata'))
-                        
-                        if chiavi_storiche_sorted:
-                            chiave_precedente = chiavi_storiche_sorted[0]
-                            if chiave_precedente.get('privata') and chiave_precedente.get('privata') != (chiave_stimata.get('privata') if chiave_stimata else None):
-                                candidate_privates.append(chiave_precedente.get('privata'))
+                if timestamp_unix:
+                    inizio_corrente = chiave_corrente.get('inizio', 0)
+                    if timestamp_unix >= inizio_corrente:
+                        chiave_stimata = chiave_corrente
                     else:
-                        if chiave_corrente.get('privata'):
-                            candidate_privates.append(chiave_corrente.get('privata'))
-                        if chiavi_storiche_sorted and chiavi_storiche_sorted[0].get('privata'):
-                            candidate_privates.append(chiavi_storiche_sorted[0].get('privata'))
-
-                    text_decifrato = None
-                    
-
-                    for privata in candidate_privates:
-                        try:
-                            
-                            try:
-                                text_bytes = base64.b64decode(text)
-                            except:
-                                text_bytes = text.encode()
-                            
-                            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
-                                keyfile.write(privata)
-                                keyfile_path = keyfile.name
-                            try:
-                                result = subprocess.run(
-                                    ['age', '-d', '-i', keyfile_path],
-                                    input=text_bytes,
-                                    capture_output=True,
-                                    check=True
-                                )
-                                text_decifrato = result.stdout.decode()
+                        chiave_stimata = None
+                        for chiave_storica in chiavi_storiche_sorted:
+                            inizio = chiave_storica.get('inizio', 0)
+                            fine = chiave_storica.get('fine')
+                            if fine is None and timestamp_unix >= inizio:
+                                chiave_stimata = chiave_storica
                                 break
-                            finally:
-                                import os
-                                os.unlink(keyfile_path)
-                        except Exception as e:
-                            
-                            continue
+                            elif fine is not None and inizio <= timestamp_unix <= fine:
+                                chiave_stimata = chiave_storica
+                                break
+                    
+                    if chiave_stimata and chiave_stimata.get('privata'):
+                        candidate_privates.append(chiave_stimata.get('privata'))
+                    
+                    if chiavi_storiche_sorted:
+                        chiave_precedente = chiavi_storiche_sorted[0]
+                        if chiave_precedente.get('privata') and chiave_precedente.get('privata') != (chiave_stimata.get('privata') if chiave_stimata else None):
+                            candidate_privates.append(chiave_precedente.get('privata'))
+                else:
+                    if chiave_corrente.get('privata'):
+                        candidate_privates.append(chiave_corrente.get('privata'))
+                    if chiavi_storiche_sorted and chiavi_storiche_sorted[0].get('privata'):
+                        candidate_privates.append(chiavi_storiche_sorted[0].get('privata'))
 
-                    if text_decifrato:
+                text_decifrato = None
+                
+
+                for privata in candidate_privates:
+                    try:
+                        
                         try:
-                            message['text'] = text_decifrato
+                            text_bytes = base64.b64decode(text)
+                        except:
+                            text_bytes = text.encode()
+                        
+                        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
+                            keyfile.write(privata)
+                            keyfile_path = keyfile.name
+                        try:
+                            result = subprocess.run(
+                                ['age', '-d', '-i', keyfile_path],
+                                input=text_bytes,
+                                capture_output=True,
+                                check=True
+                            )
+                            text_decifrato = result.stdout.decode()
+                            break
+                        finally:
+                            import os
+                            os.unlink(keyfile_path)
+                    except Exception as e:
+                        
+                        continue
+
+                if text_decifrato:
+                    try:
+                        dizionario = json.loads(text_decifrato)
+                        if dizionario['cif'] == "on":
+                            message['text'] = dizionario['text']
                             if 'json' in message:
                                 del message['json']
                             message['is_json'] = False
-                        except Exception as e:
-                            import traceback
-                            traceback.print_exc()
+                    except Exception as e:
+                        import traceback
+                        traceback.print_exc()
                 
     return {"chat_id": chat_id, "messages": messages}
 

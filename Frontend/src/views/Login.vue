@@ -32,8 +32,8 @@
                     if (response?.data?.status == "logged in"){
                         this.$router.push('/home')
                     }
-                    else{
-                        expired = 1
+                    else if(response?.data?.status == "session expired"){
+                        this.expired = 1
                     }
                 }
             },

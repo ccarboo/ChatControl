@@ -132,21 +132,24 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
             if not recipient_keys:
                 raise HTTPException(status_code=400, detail="Nessuna chiave disponibile per cifrare")
 
-            text_cyp = cifra_con_age(credentials.text, recipient_keys)
+            
+            
+            da_cifrare ={
+                "cif" : "on",
+                "text" : credentials.text,
+            }
+
+            json_da_cifrare = json.dumps(da_cifrare, sort_keys= True)
+
+            text_cyp = cifra_con_age(json_da_cifrare, recipient_keys)
             
             if text_cyp is None:
                 raise HTTPException(status_code=500, detail="Errore durante la cifratura con age")
+
             
-            da_hashare ={
-                "cif" : "on",
-                "text" : text_cyp,
-            }
-            json_da_hashare = json.dumps(da_hashare, sort_keys=True)
-            mac = hashlib.sha256(json_da_hashare.encode()).hexdigest()
             finale = {
                 "cif" : "on",
                 "text" : text_cyp,
-                "mac" : mac
             }
             
             try:
@@ -186,22 +189,21 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
             if not recipient_keys:
                 raise HTTPException(status_code=400, detail="Nessuna chiave disponibile per cifrare")
 
-            text_cyp = cifra_con_age(credentials.text, recipient_keys)
+            da_cifrare ={
+                "cif" : "on",
+                "text" : credentials.text,
+            }
+
+            json_da_cifrare = json.dumps(da_cifrare, sort_keys= True)
+
+            text_cyp = cifra_con_age(json_da_cifrare, recipient_keys)
             
             if text_cyp is None:
                 raise HTTPException(status_code=500, detail="Errore durante la cifratura con age")
             
-            da_hashare ={
-                "cif" : "on",
-                "text" : text_cyp,
-            }
-
-            json_da_hashare = json.dumps(da_hashare, sort_keys=True)
-            mac = hashlib.sha256(json_da_hashare.encode()).hexdigest()
             finale = {
                 "cif" : "on",
                 "text" : text_cyp,
-                "mac" : mac
             }
             
             try:
