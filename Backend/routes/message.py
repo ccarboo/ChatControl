@@ -14,6 +14,8 @@ import tempfile
 import shutil
 from telethon.tl.types import DocumentAttributeFilename
 import os
+import secrets
+import mimetypes
 
 
 router = APIRouter()
@@ -35,13 +37,12 @@ async def s_file(chat_id: int = Form(...), text: str = Form(""), cryph: bool = F
     data = is_logged_in(login_session)
     client = data['client']
 
+
     if not client.is_connected():
         await client.connect()
 
     if not cryph:
         try:
-            from telethon.tl.types import DocumentAttributeFilename
-            import os
             ext = os.path.splitext(file.filename)[1]
             with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
                 shutil.copyfileobj(file.file, tmp)
@@ -61,31 +62,75 @@ async def s_file(chat_id: int = Form(...), text: str = Form(""), cryph: bool = F
             raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
 
     else:
+        token = secrets.token_hex(8)
+        nome_file = token + ".dat"
         
         if group:
             recipient_keys = get_group_chyper_keys(data, chat_id)
-
-            
-
         else:
             recipient_keys = get_chat_chyper_keys(data, chat_id)
+        
+        try:
+            # Leggi il contenuto del file
+            file_content = await file.read()
             
+            guessed_mime, _ = mimetypes.guess_type(file.filename)
+            mime_type = guessed_mime or file.content_type or "application/octet-stream"
 
-        '''encrypted_path = f"/dev/shm/{file.filename}.age"
+            # Crea il JSON metadata
+            metadata = {
+                "filename": file.filename,
+                "cif": "file",
+                "text": text,
+                "mime": mime_type,
+                "size": len(file_content),
+            }
 
-        
-        process = subprocess.Popen(
-            ["age", "-r", user['target_pub_key'], "-o", encrypted_path],
-            stdin=subprocess.PIPE
-        )
+            json_metadata = json.dumps(metadata, sort_keys=True)
+            encrypted_metadata = cifra_con_age(json_metadata, recipient_keys)
 
-        while chunk := await file.read(65536): # Legge 64KB alla volta
-            process.stdin.write(chunk)
-        
-        process.stdin.close()
-        process.wait()'''
-    
-    
+            
+            metadata_bytes = json_metadata.encode('utf-8')
+            metadata_size = len(metadata_bytes)
+            
+            # Crea il payload: [dimensione_metadata(4 bytes)] + [metadata] + [file_content]
+            payload = metadata_size.to_bytes(4, byteorder='big') + metadata_bytes + file_content
+            
+            # Cifra il payload completo con age
+            encrypted_payload = cifra_con_age(payload, recipient_keys)
+            
+            if encrypted_payload is None:
+                raise HTTPException(status_code=500, detail="Errore durante la cifratura con age")
+            
+            testo = {
+                "cif":"file",
+                "text":encrypted_metadata
+            }
+
+            # Salva il file cifrato con nome = token
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".dat") as tmp:
+                if isinstance(encrypted_payload, str):
+                    tmp.write(encrypted_payload.encode('utf-8'))
+                else:
+                    tmp.write(encrypted_payload)
+                tmp_path = tmp.name
+            
+            # Invia il file tramite Telethon
+            await client.send_file(
+                chat_id,
+                tmp_path,
+                caption=json.dumps(testo),
+                force_document=True,
+                attributes=[DocumentAttributeFilename(nome_file)]
+            )
+            
+            os.remove(tmp_path)
+            
+            return {"status": "ok"}
+        except Exception as e:
+            print(e)
+            raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
+
 @router.post("/messages/send")
 async def s_message( credentials: message, login_session: str = Cookie(None)):
     data = is_logged_in(login_session)
@@ -105,53 +150,32 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
             
             recipient_keys = get_group_chyper_keys(data, credentials.chat_id)
 
-            da_cifrare ={
-                "cif" : "on",
-                "text" : credentials.text,
-            }
-
-            json_da_cifrare = json.dumps(da_cifrare, sort_keys= True)
-
-            text_cyp = cifra_con_age(json_da_cifrare, recipient_keys)
             
-            if text_cyp is None:
-                raise HTTPException(status_code=500, detail="Errore durante la cifratura con age")
-
-            
-            finale = {
-                "cif" : "on",
-                "text" : text_cyp,
-            }
-            
-            try:
-                await client.send_message(credentials.chat_id, json.dumps(finale))
-            except Exception as e:
-                raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
         else:
             
             recipient_keys = get_chat_chyper_keys(data, credentials.chat_id)
 
-            da_cifrare ={
-                "cif" : "on",
-                "text" : credentials.text,
-            }
+        da_cifrare ={
+            "cif" : "on",
+            "text" : credentials.text,
+        }
 
-            json_da_cifrare = json.dumps(da_cifrare, sort_keys= True)
+        json_da_cifrare = json.dumps(da_cifrare, sort_keys= True)
 
-            text_cyp = cifra_con_age(json_da_cifrare, recipient_keys)
-            
-            if text_cyp is None:
-                raise HTTPException(status_code=500, detail="Errore durante la cifratura con age")
-            
-            finale = {
-                "cif" : "on",
-                "text" : text_cyp,
-            }
-            
-            try:
-                await client.send_message(credentials.chat_id, json.dumps(finale))
-            except Exception as e:
-                raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
+        text_cyp = cifra_con_age(json_da_cifrare, recipient_keys)
+        
+        if text_cyp is None:
+            raise HTTPException(status_code=500, detail="Errore durante la cifratura con age")
+        
+        finale = {
+            "cif" : "on",
+            "text" : text_cyp,
+        }
+        
+        try:
+            await client.send_message(credentials.chat_id, json.dumps(finale))
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
     return {"status":"ok"}
 
 @router.post("/messages/initializing")

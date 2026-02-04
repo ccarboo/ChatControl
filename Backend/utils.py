@@ -39,7 +39,7 @@ def decifra_vault(blob_cifrato, master_key):
     except Exception as e:
         raise ValueError(f"Errore nella decifrazione del vault: {str(e)}")
 
-def cifra_con_age(plaintext: str, public_keys: list):
+def cifra_con_age(plaintext: str | bytes, public_keys: list):
     
     try:
         # Costruisci argomenti age: -r for each recipient
@@ -48,7 +48,12 @@ def cifra_con_age(plaintext: str, public_keys: list):
             args.extend(['-r', key])
         
         # Esegui age con input/output binario
-        result = subprocess.run(args, input=plaintext.encode(), capture_output=True, check=True)
+        if isinstance(plaintext, bytes):
+            input_data = plaintext
+        else:
+            input_data = plaintext.encode()
+        
+        result = subprocess.run(args, input=input_data, capture_output=True, check=True)
         ciphertext = result.stdout
         
         # Converti in base64 per trasmissione sicura

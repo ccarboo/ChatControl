@@ -85,14 +85,9 @@
                   formData.append('chat_id',this.selectedChat.id)
                   formData.append('cryph',false)
                   formData.append('group',this.selectedChat.is_group)
-
                   await api.post('/messages/send/file', formData,
                    { withCredentials: true , headers: { 'Content-Type': 'multipart/form-data' }})
-                  this.text = ''
-                  this.file = null
-                  this.$refs.fileInput.value = '';
-                  await this.reload_chat()
-
+                  
                 }
                 if(this.file && !this.text){
                   const formData = new FormData()
@@ -104,23 +99,24 @@
 
                   await api.post('/messages/send/file', formData,
                    { withCredentials: true , headers: { 'Content-Type': 'multipart/form-data' }})
-                  this.text = ''
-                  this.file = null
-                  this.$refs.fileInput.value = '';
-                  await this.reload_chat()
                 }
+                else{
                   await api.post('/messages/send', {
                     text: this.text,
                     chat_id: this.selectedChat.id,
                     cryph: false,
                     group: this.selectedChat.is_group
                   }, { withCredentials: true })
-                  this.text = ''
-                  await this.reload_chat()
+                  
+                }
               } catch (e) {
                   this.errormsg = e.response?.data?.message || e.message
               } finally {
+                  this.file = null
+                  this.$refs.fileInput.value = '';
                   this.loading = false
+                  this.text = ''
+                  await this.reload_chat()
               }
             },
             async handleSubmit(){
@@ -131,23 +127,73 @@
               }
             },
             async sendChyp(){
-              if (!this.selectedChat || !this.text?.trim()) {
+              if (!this.selectedChat) {
                 return
               }
               this.loading = true
-              try {
-                  await api.post('/messages/send', {
-                    text: this.text,
-                    chat_id: this.selectedChat.id,
-                    cryph: true,
-                    group: this.selectedChat.is_group
-                  }, { withCredentials: true })
-                  this.text = ''
-                  await this.reload_chat()
-              } catch (e) {
-                  this.errormsg = e.response?.data?.message || e.message
-              } finally {
-                  this.loading = false
+              if (!this.file){
+                try {
+                    await api.post('/messages/send', {
+                      text: this.text,
+                      chat_id: this.selectedChat.id,
+                      cryph: true,
+                      group: this.selectedChat.is_group
+                    }, { withCredentials: true })
+                    this.text = ''
+                    await this.reload_chat()
+                } catch (e) {
+                    this.errormsg = e.response?.data?.message || e.message
+                } finally {
+                    this.loading = false
+                }
+              }
+              else{
+                if(this.file && this.text){
+
+                  const formData = new FormData()
+                  formData.append('file',this.file)
+                  formData.append('text', this.text)
+                  formData.append('chat_id',this.selectedChat.id)
+                  formData.append('cryph',true)
+                  formData.append('group',this.selectedChat.is_group)
+                  try{
+                    await api.post('/messages/send/file', formData,
+                    { withCredentials: true , headers: { 'Content-Type': 'multipart/form-data' }})
+                  }
+                  catch(e){
+                    this.errormsg = e.response?.data?.message || e.message
+                  }
+                  finally{
+                    this.file = null
+                    this.$refs.fileInput.value = '';
+                    this.loading = false
+                    this.text = ''
+                    await this.reload_chat()
+                  }
+                }
+                else if(this.file && !this.text){
+
+                  const formData = new FormData()
+                  formData.append('file',this.file)
+                  formData.append('text', "")
+                  formData.append('chat_id',this.selectedChat.id)
+                  formData.append('cryph',true)
+                  formData.append('group',this.selectedChat.is_group)
+                  try{
+                    await api.post('/messages/send/file', formData,
+                    { withCredentials: true , headers: { 'Content-Type': 'multipart/form-data' }})
+                  }
+                  catch(e){
+                    this.errormsg = e.response?.data?.message || e.message
+                  }
+                  finally{
+                    this.file = null
+                    this.$refs.fileInput.value = '';
+                    this.loading = false
+                    this.text = ''
+                    await this.reload_chat()
+                  }
+                }
               }
             },
             async sendkey(){
@@ -182,6 +228,17 @@
                   messagesDiv.scrollTop = messagesDiv.scrollHeight
                 }
               })
+            },
+            formatFileSize(bytes) {
+              if (!bytes) return '0 B'
+              const k = 1024
+              if (bytes < k) return bytes + ' B'
+              if (bytes < k * k) return (bytes / k).toFixed(1) + ' KB'
+              if (bytes < k * k * k) return (bytes / (k * k)).toFixed(1) + ' MB'
+              return (bytes / (k * k * k)).toFixed(1) + ' GB'
+            },
+            handleFileClick(message) {
+              console.log('File clicked:', message)
             }
         },
         mounted() {
@@ -262,10 +319,24 @@
                :class="{ 'message-out': m.out, 'message-in': !m.out }"
              >
                <div class="message-bubble">
-                 <div class="message-header">
+                 <div class="message-header" >
                    {{ m.out ? 'Tu' : (m.sender_username || m.sender_id) }}
                  </div>
-                 <div class="message-text">{{ m.text }}</div>
+                 <div v-if="m.file">
+                   <div class="file-container" @click="handleFileClick(m)">
+                     <img src="/file.svg" alt="file" class="file-icon">
+                     <div class="file-info">
+                       <div class="file-name">{{ m.filename }}</div>
+                       <div class="file-size">{{ formatFileSize(m.size) }}</div>
+                     </div>
+                   </div>
+                 </div>
+                 <div class="message-text" v-if="!m.error">
+                    {{ m.text }}
+                  </div>
+                  <div class="message-text" v-else>
+                      messaggio compromesso!!
+                  </div>
                  <div class="message-time">
                    {{ new Date(m.date).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }) }}
                  </div>
@@ -412,6 +483,42 @@
   height: 22px;
   display: block;
   margin: auto;
+}
+
+/* File display */
+.file-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  background-color: rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  margin-bottom: 6px;
+}
+
+.file-icon {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+}
+
+.file-info {
+  flex-grow: 1;
+  min-width: 0;
+}
+
+.file-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-size {
+  font-size: 0.75rem;
+  opacity: 0.8;
+  margin-top: 2px;
 }
 
 </style>
