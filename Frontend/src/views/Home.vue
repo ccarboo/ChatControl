@@ -85,6 +85,10 @@
               this.loading = true
               let response
 
+              // Reset animated stickers quando cambi chat
+              this.animatedStickerLoaded.clear()
+              this.animatedStickerNodes = {}
+
               try {
                   response = await api.get(`/chats/${chat.id}`, { withCredentials: true })
                   console.log('messaggi ricevuti:', response.data)
@@ -92,6 +96,11 @@
                   
                   await this.init_chat(chat)
                   this.scrollToBottom()
+                  
+                  // Carica sticker animati dopo che il DOM è renderizzato
+                  this.$nextTick(() => {
+                    setTimeout(() => this.initAnimatedStickers(), 100)
+                  })
               } catch (e) {
                   this.errormsg = e.response?.data?.message || e.message
               } finally {

@@ -712,12 +712,10 @@ async def download_media(chat_id: int, message_id: int, login_session: str = Coo
                 detail=f"Messaggio senza media (chat_id={chat_id}, message_id={message_id})"
             )
         
-        # Scarica il file in memoria
         file_bytes = io.BytesIO()
         await client.download_media(message, file=file_bytes)
         file_bytes.seek(0)
         
-        # Determina il MIME type
         mime_type = 'application/octet-stream'
         
         if message.sticker:
@@ -731,7 +729,6 @@ async def download_media(chat_id: int, message_id: int, login_session: str = Coo
         elif message.video:
             mime_type = message.video.mime_type or 'video/mp4'
         
-        # Streaming response con cache headers
         return StreamingResponse(
             iter([file_bytes.getvalue()]),
             media_type=mime_type,
