@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Cookie
+from fastapi import APIRouter, Cookie, Depends
 import sqlite3
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -7,6 +7,7 @@ from config import pepper
 import time
 import hashlib
 from utils import decifra_vault, cifra_vault, is_logged_in, is_valid_age_public_key
+from telethon.tl.types import DocumentAttributeAnimated
 from datetime import datetime
 import json
 import base64
@@ -105,7 +106,7 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
     messages = []
     async for msg in client.iter_messages(entity, limit=limit):
         sender = await msg.get_sender()
-        messages.append({
+        message_data = {
             'id': msg.id,
             'text': msg.message or '',
             'date': msg.date if msg.date else None,
@@ -113,7 +114,57 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
             'sender_username': getattr(sender, 'username', None) if sender else None,
             'out': msg.out,
             'reply_to': msg.reply_to.reply_to_msg_id if msg.reply_to else None,
-        })
+        }
+        
+        # Estrai dati del media se presente
+        if msg.media:
+            message_data['file'] = True
+            
+            # Controlla PRIMA sticker e gif (altrimenti finiscono come documenti)
+            if msg.sticker:
+                document = msg.sticker
+                is_animated = any(
+                    isinstance(attr, DocumentAttributeAnimated)
+                    for attr in (document.attributes or [])
+                )
+                mime = document.mime_type or 'image/webp'
+                if is_animated or mime in ('application/x-tgsticker', 'video/webm'):
+                    message_data['media_type'] = 'sticker_animated'
+                else:
+                    message_data['media_type'] = 'sticker'
+                message_data['size'] = document.size
+                message_data['mime'] = mime
+            
+            elif msg.gif:
+                message_data['media_type'] = 'gif'
+                message_data['size'] = msg.gif.size
+                message_data['mime'] = msg.gif.mime_type or 'video/mp4'
+            
+            # Documenti generici
+            elif msg.document:
+                document = msg.document
+                message_data['media_type'] = 'document'
+                message_data['filename'] = None
+                message_data['mime'] = document.mime_type or 'application/octet-stream'
+                message_data['size'] = document.size or 0
+                
+                for attr in (document.attributes or []):
+                    if hasattr(attr, 'file_name'):
+                        message_data['filename'] = attr.file_name
+                        break
+            
+            # Foto
+            elif msg.photo:
+                message_data['media_type'] = 'photo'
+                message_data['size'] = msg.photo.size if hasattr(msg.photo, 'size') else 0
+            
+            # Video
+            elif msg.video:
+                message_data['media_type'] = 'video'
+                message_data['size'] = msg.video.size if hasattr(msg.video, 'size') else 0
+                message_data['mime'] = msg.video.mime_type if hasattr(msg.video, 'mime_type') else 'video/mp4'
+        
+        messages.append(message_data)
 
     messages.reverse()  
 
@@ -633,4 +684,67 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
         "keys_added": keys_added,
         "total_keys": len(existing_keys)
     }
+
+
+@router.get("/media/download/{chat_id}/{message_id}")
+async def download_media(chat_id: int, message_id: int, login_session: str = Cookie(None)):
+    from fastapi.responses import StreamingResponse
+    import io
+    
+    data = is_logged_in(login_session)
+    client = data['client']
+    
+    if not client.is_connected():
+        await client.connect()
+    
+    try:
+        entity = await client.get_entity(chat_id)
+        message = await client.get_messages(entity, ids=message_id)
+        
+        if not message:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Messaggio non trovato (chat_id={chat_id}, message_id={message_id})"
+            )
+        if not message.media:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Messaggio senza media (chat_id={chat_id}, message_id={message_id})"
+            )
+        
+        # Scarica il file in memoria
+        file_bytes = io.BytesIO()
+        await client.download_media(message, file=file_bytes)
+        file_bytes.seek(0)
+        
+        # Determina il MIME type
+        mime_type = 'application/octet-stream'
+        
+        if message.sticker:
+            mime_type = message.sticker.mime_type or 'image/webp'
+        elif message.gif:
+            mime_type = message.gif.mime_type or 'video/mp4'
+        elif message.photo:
+            mime_type = 'image/jpeg'
+        elif message.document:
+            mime_type = message.document.mime_type or 'application/octet-stream'
+        elif message.video:
+            mime_type = message.video.mime_type or 'video/mp4'
+        
+        # Streaming response con cache headers
+        return StreamingResponse(
+            iter([file_bytes.getvalue()]),
+            media_type=mime_type,
+            headers={
+                'Cache-Control': 'public, max-age=31536000',
+                'ETag': f'"{chat_id}-{message_id}"'
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ERROR download_media: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=502, detail=f"Errore download: {str(e)}")
     

@@ -20,6 +20,8 @@ import mimetypes
 
 router = APIRouter()
 
+CAPTION_LIMIT = 1024
+
 class message (BaseModel):
     text: str
     chat_id: int
@@ -116,21 +118,32 @@ async def s_file(chat_id: int = Form(...), text: str = Form(""), cryph: bool = F
                 tmp_path = tmp.name
             
             # Invia il file tramite Telethon
-            await client.send_file(
-                chat_id,
-                tmp_path,
-                caption=json.dumps(testo),
-                force_document=True,
-                attributes=[DocumentAttributeFilename(nome_file)]
-            )
-            
-            os.remove(tmp_path)
-            
-            return {"status": "ok"}
+
+            testo_str = json.dumps(testo)
+
+            if len(testo_str) <= CAPTION_LIMIT:
+                await client.send_file(
+                    chat_id,
+                    tmp_path,
+                    caption=testo_str,
+                    force_document=True,
+                    attributes=[DocumentAttributeFilename(nome_file)]
+                )
+                
+                os.remove(tmp_path)
+                
+                return {"status": "ok"}
+            else:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"caption troppo lunga ({len(testo_str)}>{CAPTION_LIMIT})"
+                )
+        except HTTPException:
+            raise
         except Exception as e:
             print(e)
             raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
-
+        
 @router.post("/messages/send")
 async def s_message( credentials: message, login_session: str = Cookie(None)):
     data = is_logged_in(login_session)

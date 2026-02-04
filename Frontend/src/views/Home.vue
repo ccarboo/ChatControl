@@ -1,5 +1,7 @@
 <script>
-    import api from '@/services/api'
+  import api from '@/services/api'
+  import lottie from 'lottie-web'
+  import pako from 'pako'
      export default {
         data: function() {
             return {
@@ -14,10 +16,49 @@
                 text: '',
                 useAltSend: false,
                 chatsInterval: null,
-                chatReloadInterval: null
+                chatReloadInterval: null,
+                animatedStickerNodes: {},
+                animatedStickerLoaded: new Set()
             }
         },
         methods: {
+            setAnimatedStickerRef(messageId, el) {
+              if (el) {
+                this.animatedStickerNodes[messageId] = el
+              }
+            },
+            mediaUrl(messageId) {
+              return `${__API_URL__}/media/download/${this.selectedChat.id}/${messageId}`
+            },
+            async initAnimatedStickers() {
+              if (!this.selectedChat) return
+              const targets = this.messaggi.filter(
+                (m) => m.media_type === 'sticker_animated' && (!m.mime || m.mime === 'application/x-tgsticker')
+              )
+              for (const m of targets) {
+                if (this.animatedStickerLoaded.has(m.id)) continue
+                const container = this.animatedStickerNodes[m.id]
+                if (!container) continue
+                try {
+                  const res = await fetch(this.mediaUrl(m.id), { credentials: 'include' })
+                  if (!res.ok) continue
+                  const buffer = await res.arrayBuffer()
+                  const jsonStr = pako.inflate(new Uint8Array(buffer), { to: 'string' })
+                  const animationData = JSON.parse(jsonStr)
+                  container.innerHTML = ''
+                  lottie.loadAnimation({
+                    container,
+                    renderer: 'svg',
+                    loop: true,
+                    autoplay: true,
+                    animationData
+                  })
+                  this.animatedStickerLoaded.add(m.id)
+                } catch (e) {
+                  console.error('Errore caricamento sticker animato:', e)
+                }
+              }
+            },
             removeFile() {
               this.file = null;
               this.$refs.fileInput.value = '';
@@ -89,7 +130,7 @@
                    { withCredentials: true , headers: { 'Content-Type': 'multipart/form-data' }})
                   
                 }
-                if(this.file && !this.text){
+                else if(this.file && !this.text){
                   const formData = new FormData()
                   formData.append('file',this.file)
                   formData.append('text', '')
@@ -100,7 +141,7 @@
                   await api.post('/messages/send/file', formData,
                    { withCredentials: true , headers: { 'Content-Type': 'multipart/form-data' }})
                 }
-                else{
+                else if(this.text.trim().length !== 0){
                   await api.post('/messages/send', {
                     text: this.text,
                     chat_id: this.selectedChat.id,
@@ -131,7 +172,7 @@
                 return
               }
               this.loading = true
-              if (!this.file){
+              if (!this.file && this.text.trim().length !== 0){
                 try {
                     await api.post('/messages/send', {
                       text: this.text,
@@ -241,6 +282,14 @@
               console.log('File clicked:', message)
             }
         },
+        watch: {
+          messaggi: {
+            handler() {
+              this.$nextTick(() => this.initAnimatedStickers())
+            },
+            deep: true
+          }
+        },
         mounted() {
             this.get_chats()
             this.chatsInterval = setInterval(() => {
@@ -323,12 +372,54 @@
                    {{ m.out ? 'Tu' : (m.sender_username || m.sender_id) }}
                  </div>
                  <div v-if="m.file">
-                   <div class="file-container" @click="handleFileClick(m)">
+                   <!-- Documenti -->
+                   <div v-if="m.media_type === 'document'" class="file-container" @click="handleFileClick(m)">
                      <img src="/file.svg" alt="file" class="file-icon">
                      <div class="file-info">
                        <div class="file-name">{{ m.filename }}</div>
                        <div class="file-size">{{ formatFileSize(m.size) }}</div>
                      </div>
+                   </div>
+                   
+                   <!-- Immagini -->
+                   <div v-else-if="m.media_type === 'photo'" class="media-container">
+                     <img :src="mediaUrl(m.id)" alt="photo" class="media-image" style="max-width: 100%; max-height: 300px; border-radius: 8px;">
+                     <div class="file-size" v-if="m.size">{{ formatFileSize(m.size) }}</div>
+                   </div>
+                   
+                   <!-- Video -->
+                   <div v-else-if="m.media_type === 'video'" class="media-container">
+                     <video controls style="max-width: 100%; max-height: 300px; border-radius: 8px;">
+                       <source :src="mediaUrl(m.id)" :type="m.mime || 'video/mp4'">
+                       Errore: browser non supporta video
+                     </video>
+                     <div class="file-size" v-if="m.size">{{ formatFileSize(m.size) }}</div>
+                   </div>
+                   
+                   <!-- Sticker statici -->
+                   <div v-else-if="m.media_type === 'sticker'" class="media-container">
+                     <img :src="mediaUrl(m.id)" alt="sticker" class="sticker-icon" style="width: 150px; height: 150px;">
+                   </div>
+                   
+                   <!-- Sticker animati -->
+                   <div v-else-if="m.media_type === 'sticker_animated'" class="media-container">
+                     <video v-if="m.mime && m.mime.startsWith('video/')" autoplay loop muted playsinline style="width: 150px; height: 150px; border-radius: 8px;">
+                       <source :src="mediaUrl(m.id)" :type="m.mime">
+                     </video>
+                     <div
+                       v-else
+                       class="sticker-anim-container"
+                       style="width: 150px; height: 150px;"
+                       :ref="(el) => setAnimatedStickerRef(m.id, el)"
+                     ></div>
+                   </div>
+                   
+                   <!-- GIF -->
+                   <div v-else-if="m.media_type === 'gif'" class="media-container">
+                     <video autoplay loop muted playsinline style="max-width: 100%; max-height: 300px; border-radius: 8px;">
+                       <source :src="mediaUrl(m.id)" type="video/mp4">
+                     </video>
+                     <div class="file-size" v-if="m.size">{{ formatFileSize(m.size) }}</div>
                    </div>
                  </div>
                  <div class="message-text" v-if="!m.error">
@@ -356,15 +447,26 @@
                   <input class="form-check-input" type="checkbox" id="altSend" v-model="useAltSend">
                   <label class="form-check-label" for="altSend">cifra</label>
                 </div>
-                <button type="submit" class="btn btn-primary send-btn">
+                <button type="submit" class="btn btn-primary send-btn" v-if="!file || text.length < 1024">
                   <img 
                     src="/send.svg"  
                     alt="Invia"
                     class="send-icon"
                   >
                 </button>
+                <div v-else-if="file && text.length >= 1024" class="d-flex align-items-center gap-2">
+                  <button type="button" class="btn btn-secondary send-btn" disabled title="Messaggio troppo lungo">
+                    <img 
+                      src="/send.svg"  
+                      alt="Messaggio troppo lungo"
+                      class="send-icon"
+                      style="opacity: 0.5"
+                    >
+                  </button>
+                  <small class="text-danger">Messaggio troppo lungo ({{ text.length }}/1024)</small>
+                </div>
                 <input
-                  ref="fileInput"
+                  ref="fileInput" 
                   type="file"
                   style="display: none"
                   @change="handleFileChange"
