@@ -508,7 +508,111 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
                     except Exception as e:
                         import traceback
                         traceback.print_exc()
+            
+            if cif_flag == "message":
+                try:
+                    message_id = message.get('id')
+                    if not message_id:
+                        continue
 
+                    full_message = await client.get_messages(entity, ids=message_id)
+                    if not full_message or not full_message.media or not full_message.document:
+                        continue
+
+                    import io
+                    file_bytes = io.BytesIO()
+                    await client.download_media(full_message, file=file_bytes)
+                    file_bytes.seek(0)
+                    encrypted_payload = file_bytes.getvalue()
+
+                    timestamp = message.get('date')
+                    timestamp_unix = timestamp.timestamp() if timestamp else None
+                    chats_data = data['data'].get('chats', {})
+                    chat_keys = chats_data.get(chat_id_cif, {})
+
+                    candidate_privates = []
+                    chiave_corrente = chat_keys.get('chiave', {})
+                    chiavi_storiche = chat_keys.get('chiavi', [])
+                    chiavi_storiche_sorted = sorted(
+                        [c for c in chiavi_storiche if c.get('privata')],
+                        key=lambda c: c.get('inizio', 0),
+                        reverse=True
+                    )
+
+                    if timestamp_unix:
+                        inizio_corrente = chiave_corrente.get('inizio', 0)
+                        if timestamp_unix >= inizio_corrente:
+                            chiave_stimata = chiave_corrente
+                        else:
+                            chiave_stimata = None
+                            for chiave_storica in chiavi_storiche_sorted:
+                                inizio = chiave_storica.get('inizio', 0)
+                                fine = chiave_storica.get('fine')
+                                if fine is None and timestamp_unix >= inizio:
+                                    chiave_stimata = chiave_storica
+                                    break
+                                elif fine is not None and inizio <= timestamp_unix <= fine:
+                                    chiave_stimata = chiave_storica
+                                    break
+
+                        if chiave_stimata and chiave_stimata.get('privata'):
+                            candidate_privates.append(chiave_stimata.get('privata'))
+
+                        if chiavi_storiche_sorted:
+                            chiave_precedente = chiavi_storiche_sorted[0]
+                            if chiave_precedente.get('privata') and chiave_precedente.get('privata') != (chiave_stimata.get('privata') if chiave_stimata else None):
+                                candidate_privates.append(chiave_precedente.get('privata'))
+                    else:
+                        if chiave_corrente.get('privata'):
+                            candidate_privates.append(chiave_corrente.get('privata'))
+                        if chiavi_storiche_sorted and chiavi_storiche_sorted[0].get('privata'):
+                            candidate_privates.append(chiavi_storiche_sorted[0].get('privata'))
+
+                    decrypted_payload = None
+                    for privata in candidate_privates:
+                        try:
+                            try:
+                                input_bytes = base64.b64decode(encrypted_payload)
+                            except Exception:
+                                input_bytes = encrypted_payload
+                            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
+                                keyfile.write(privata)
+                                keyfile_path = keyfile.name
+                            try:
+                                result = subprocess.run(
+                                    ['age', '-d', '-i', keyfile_path],
+                                    input=input_bytes,
+                                    capture_output=True,
+                                    check=True
+                                )
+                                decrypted_payload = result.stdout
+                                break
+                            finally:
+                                import os
+                                os.unlink(keyfile_path)
+                        except Exception:
+                            continue
+
+                    if decrypted_payload and len(decrypted_payload) >= 4:
+                        metadata_size = int.from_bytes(decrypted_payload[:4], byteorder='big')
+                        if 0 < metadata_size <= len(decrypted_payload) - 4:
+                            inner_metadata_bytes = decrypted_payload[4:4 + metadata_size]
+                            message_bytes = decrypted_payload[4 + metadata_size:]
+                            try:
+                                inner_metadata_str = inner_metadata_bytes.decode('utf-8')
+                                inner_metadata = json.loads(inner_metadata_str)
+                            except Exception:
+                                inner_metadata = None
+
+                            if inner_metadata and inner_metadata.get('cif') == 'message':
+                                message['text'] = message_bytes.decode('utf-8', errors='replace')
+                                if 'json' in message:
+                                    del message['json']
+                                message['is_json'] = False
+                                message['file'] = False
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
     return {"chat_id": chat_id, "messages": messages}
 
 @router.get("/chats/{chat_id}/inits")
