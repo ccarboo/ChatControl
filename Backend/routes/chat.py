@@ -84,8 +84,8 @@ async def get_chats(login_session: str = Cookie(None), offset_date: str = None):
 
     return {"chats": chats}
 
-@router.get("/chats/{chat_id}")
-async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = Cookie(None)):
+@router.get("/chats/{chat_id}/limit/{limit}")
+async def get_chat_messages(chat_id: int, limit: int, login_session: str = Cookie(None)):
     data = is_logged_in(login_session)
     chat_id_cif = hashlib.sha256(pepper.encode() + str(chat_id).encode()).hexdigest()
 
@@ -108,6 +108,7 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
         sender = await msg.get_sender()
         message_data = {
             'id': msg.id,
+            'chat_id': chat_id,
             'text': msg.message or '',
             'date': msg.date if msg.date else None,
             'sender_id': msg.sender_id,
@@ -173,9 +174,11 @@ async def get_chat_messages(chat_id: int, limit: int = 50, login_session: str = 
         text = message.get('text') or ''
         try:
             parsed = json.loads(text)
-            message['json'] = parsed
-            message['is_json'] = True
-            
+            if isinstance(parsed, dict):
+                message['json'] = parsed
+                message['is_json'] = True
+            else:
+                message['is_json'] = False
         except Exception:
             message['is_json'] = False
         

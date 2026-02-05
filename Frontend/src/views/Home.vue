@@ -18,7 +18,14 @@
                 chatsInterval: null,
                 chatReloadInterval: null,
                 animatedStickerNodes: {},
-                animatedStickerLoaded: new Set()
+                animatedStickerLoaded: new Set(),
+                topReachedMessageId: 50,
+                topReachedArmed: true,
+                lastChatsAt: 0,
+                lastReloadAt: 0,
+                chatsInFlight: false,
+                reloadInFlight: false,
+                dist : false,
             }
         },
         methods: {
@@ -27,20 +34,24 @@
                 this.animatedStickerNodes[messageId] = el
               }
             },
-            mediaUrl(messageId) {
-              return `${__API_URL__}/media/download/${this.selectedChat.id}/${messageId}`
+            mediaUrl(messageId, chatId) {
+              const resolvedChatId = chatId ?? this.selectedChat?.id
+              if (!resolvedChatId) return ''
+              return `${__API_URL__}/media/download/${resolvedChatId}/${messageId}`
             },
             async initAnimatedStickers() {
               if (!this.selectedChat) return
+              const chatId = this.selectedChat.id
               const targets = this.messaggi.filter(
                 (m) => m.media_type === 'sticker_animated' && (!m.mime || m.mime === 'application/x-tgsticker')
               )
               for (const m of targets) {
+                if (!this.selectedChat || this.selectedChat.id !== chatId) return
                 if (this.animatedStickerLoaded.has(m.id)) continue
                 const container = this.animatedStickerNodes[m.id]
                 if (!container) continue
                 try {
-                  const res = await fetch(this.mediaUrl(m.id), { credentials: 'include' })
+                  const res = await fetch(this.mediaUrl(m.id, m.chat_id || chatId), { credentials: 'include' })
                   if (!res.ok) continue
                   const buffer = await res.arrayBuffer()
                   const jsonStr = pako.inflate(new Uint8Array(buffer), { to: 'string' })
@@ -67,16 +78,21 @@
               this.file = event.target.files[0];
             },
             async get_chats(){
+              const now = Date.now()
+              if (this.chatsInFlight || now - this.lastChatsAt < 5000) return
               this.errormsg = null
               this.loading = true
+              this.chatsInFlight = true
               let response
               try {
                   response = await api.get('/chats', { withCredentials: true })
                   console.log('chat requested:', response.data)
                   this.chats = response.data.chats
+                this.lastChatsAt = now
               } catch (e) {
                   this.errormsg = e.response?.data?.message || e.message
               } finally {
+                this.chatsInFlight = false
                   this.loading = false
               }
             },
@@ -88,9 +104,12 @@
               // Reset animated stickers quando cambi chat
               this.animatedStickerLoaded.clear()
               this.animatedStickerNodes = {}
+              this.topReachedMessageId = 50
+              this.topReachedArmed = true
+              this.messaggi = []
 
-              try {
-                  response = await api.get(`/chats/${chat.id}`, { withCredentials: true })
+                try {
+                  response = await api.get(`/chats/${chat.id}/limit/${this.topReachedMessageId}`, { withCredentials: true })
                   console.log('messaggi ricevuti:', response.data)
                   this.messaggi = response.data.messages
                   
@@ -108,16 +127,21 @@
               }
             },
             async reload_chat(){
+              const now = Date.now()
+              if (this.reloadInFlight || now - this.lastReloadAt < 5000) return
               this.loading = true
+              this.reloadInFlight = true
               let response
               let chat = this.selectedChat
               try {
-                  response = await api.get(`/chats/${chat.id}`, { withCredentials: true })
+                  response = await api.get(`/chats/${chat.id}/limit/${this.topReachedMessageId}`, { withCredentials: true })
                   console.log('messaggi ricevuti:', response.data)
                   this.messaggi = response.data.messages
+                this.lastReloadAt = now
               } catch (e) {
                   this.errormsg = e.response?.data?.message || e.message
               } finally {
+                this.reloadInFlight = false
                   this.loading = false
               }
             },
@@ -279,6 +303,25 @@
                 }
               })
             },
+            handleMessagesScroll() {
+              const messagesDiv = this.$refs.messagesContainer
+              if (!messagesDiv || this.messaggi.length === 0) return
+
+              const threshold = 8
+              const resetThreshold = 40
+
+              const distanceFromBottom = messagesDiv.scrollHeight - (messagesDiv.scrollTop + messagesDiv.clientHeight)
+              this.dist = distanceFromBottom > 200
+              if (messagesDiv.scrollTop <= threshold && this.topReachedArmed) {
+                this.topReachedMessageId = this.topReachedMessageId + 20
+                this.topReachedArmed = false
+                return
+              }
+
+              if (messagesDiv.scrollTop > resetThreshold) {
+                this.topReachedArmed = true
+              }
+            },
             formatFileSize(bytes) {
               if (!bytes) return '0 B'
               const k = 1024
@@ -416,7 +459,8 @@
             <button @click="sendkey()" class="btn btn-primary btn-sm">Invia chiave</button>
           </div>
           
-          <div ref="messagesContainer" class="flex-grow-1 overflow-auto p-3 bg-chat">
+          <div class="messages-area flex-grow-1">
+          <div ref="messagesContainer" class="messages-scroll p-3 bg-chat" @scroll="handleMessagesScroll">
              <div 
                v-for="m in messaggi" 
                :key="m.id" 
@@ -439,14 +483,14 @@
                    
                    <!-- Immagini -->
                    <div v-else-if="m.media_type === 'photo'" class="media-container">
-                     <img :src="mediaUrl(m.id)" alt="photo" class="media-image" style="max-width: 100%; max-height: 300px; border-radius: 8px;">
+                     <img :src="mediaUrl(m.id, m.chat_id)" alt="photo" class="media-image" style="max-width: 100%; max-height: 300px; border-radius: 8px;">
                      <div class="file-size" v-if="m.size">{{ formatFileSize(m.size) }}</div>
                    </div>
                    
                    <!-- Video -->
                    <div v-else-if="m.media_type === 'video'" class="media-container">
                      <video controls style="max-width: 100%; max-height: 300px; border-radius: 8px;">
-                       <source :src="mediaUrl(m.id)" :type="m.mime || 'video/mp4'">
+                       <source :src="mediaUrl(m.id, m.chat_id)" :type="m.mime || 'video/mp4'">
                        Errore: browser non supporta video
                      </video>
                      <div class="file-size" v-if="m.size">{{ formatFileSize(m.size) }}</div>
@@ -454,13 +498,13 @@
                    
                    <!-- Sticker statici -->
                    <div v-else-if="m.media_type === 'sticker'" class="media-container">
-                     <img :src="mediaUrl(m.id)" alt="sticker" class="sticker-icon" style="width: 150px; height: 150px;">
+                     <img :src="mediaUrl(m.id, m.chat_id)" alt="sticker" class="sticker-icon" style="width: 150px; height: 150px;">
                    </div>
                    
                    <!-- Sticker animati -->
                    <div v-else-if="m.media_type === 'sticker_animated'" class="media-container">
                      <video v-if="m.mime && m.mime.startsWith('video/')" autoplay loop muted playsinline style="width: 150px; height: 150px; border-radius: 8px;">
-                       <source :src="mediaUrl(m.id)" :type="m.mime">
+                       <source :src="mediaUrl(m.id, m.chat_id)" :type="m.mime">
                      </video>
                      <div
                        v-else
@@ -473,7 +517,7 @@
                    <!-- GIF -->
                    <div v-else-if="m.media_type === 'gif'" class="media-container">
                      <video autoplay loop muted playsinline style="max-width: 100%; max-height: 300px; border-radius: 8px;">
-                       <source :src="mediaUrl(m.id)" type="video/mp4">
+                       <source :src="mediaUrl(m.id, m.chat_id)" type="video/mp4">
                      </video>
                      <div class="file-size" v-if="m.size">{{ formatFileSize(m.size) }}</div>
                    </div>
@@ -489,6 +533,19 @@
                  </div>
                </div> 
              </div>
+          </div>
+          <button
+            type="button"
+            class="btn btn-primary chat-overlay-btn"
+            @click="scrollToBottom"
+            v-show="dist"
+          >
+            <img 
+                    src="/arrow-down.svg"  
+                    alt="Invia"
+                    class="send-icon"
+                  >
+          </button>
           </div>
 
             <form @submit.prevent="handleSubmit()">
@@ -558,6 +615,26 @@
 
 .bg-chat {
   background-color: #f8f9fa;
+  position: relative;
+}
+
+.messages-area {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.messages-scroll {
+  height: 100%;
+  overflow: auto;
+}
+
+.chat-overlay-btn {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 5;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
 }
 
 .message-wrapper {
@@ -678,5 +755,7 @@
   opacity: 0.8;
   margin-top: 2px;
 }
+
+
 
 </style>
