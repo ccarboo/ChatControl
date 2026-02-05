@@ -724,10 +724,11 @@ async def download_media(chat_id: int, message_id: int, login_session: str = Coo
             mime_type = message.gif.mime_type or 'video/mp4'
         elif message.photo:
             mime_type = 'image/jpeg'
-        elif message.document:
-            mime_type = message.document.mime_type or 'application/octet-stream'
         elif message.video:
             mime_type = message.video.mime_type or 'video/mp4'
+        elif message.document:
+            mime_type = message.document.mime_type or 'application/octet-stream'
+
         
         return StreamingResponse(
             iter([file_bytes.getvalue()]),
@@ -741,6 +742,193 @@ async def download_media(chat_id: int, message_id: int, login_session: str = Coo
         raise
     except Exception as e:
         print(f"ERROR download_media: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=502, detail=f"Errore download: {str(e)}")
+    
+
+@router.get("/media/cifrato/download/{chat_id}/{message_id}")
+async def download_encrypt_media(chat_id: int, message_id: int, login_session: str = Cookie(None)):
+    data = is_logged_in(login_session)
+    client = data['client']
+    
+    if not client.is_connected():
+        await client.connect()
+    
+    from fastapi.responses import StreamingResponse
+    import io
+    import os
+    import mimetypes
+    
+    def build_candidate_privates(chat_id_hash: str, timestamp):
+        timestamp_unix = timestamp.timestamp() if timestamp else None
+        chats_data = data['data'].get('chats', {})
+        chat_keys = chats_data.get(chat_id_hash, {})
+
+        candidate_privates = []
+        chiave_corrente = chat_keys.get('chiave', {})
+        chiavi_storiche = chat_keys.get('chiavi', [])
+        chiavi_storiche_sorted = sorted(
+            [c for c in chiavi_storiche if c.get('privata')],
+            key=lambda c: c.get('inizio', 0),
+            reverse=True
+        )
+
+        if timestamp_unix:
+            inizio_corrente = chiave_corrente.get('inizio', 0)
+            if timestamp_unix >= inizio_corrente:
+                chiave_stimata = chiave_corrente
+            else:
+                chiave_stimata = None
+                for chiave_storica in chiavi_storiche_sorted:
+                    inizio = chiave_storica.get('inizio', 0)
+                    fine = chiave_storica.get('fine')
+                    if fine is None and timestamp_unix >= inizio:
+                        chiave_stimata = chiave_storica
+                        break
+                    elif fine is not None and inizio <= timestamp_unix <= fine:
+                        chiave_stimata = chiave_storica
+                        break
+
+            if chiave_stimata and chiave_stimata.get('privata'):
+                candidate_privates.append(chiave_stimata.get('privata'))
+
+            if chiavi_storiche_sorted:
+                chiave_precedente = chiavi_storiche_sorted[0]
+                if chiave_precedente.get('privata') and chiave_precedente.get('privata') != (chiave_stimata.get('privata') if chiave_stimata else None):
+                    candidate_privates.append(chiave_precedente.get('privata'))
+        else:
+            if chiave_corrente.get('privata'):
+                candidate_privates.append(chiave_corrente.get('privata'))
+            if chiavi_storiche_sorted and chiavi_storiche_sorted[0].get('privata'):
+                candidate_privates.append(chiavi_storiche_sorted[0].get('privata'))
+
+        return candidate_privates
+
+    def decrypt_with_age(ciphertext, candidate_privates):
+        for privata in candidate_privates:
+            try:
+                try:
+                    input_bytes = base64.b64decode(ciphertext)
+                except Exception:
+                    input_bytes = ciphertext if isinstance(ciphertext, (bytes, bytearray)) else str(ciphertext).encode()
+
+                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
+                    keyfile.write(privata)
+                    keyfile_path = keyfile.name
+                try:
+                    result = subprocess.run(
+                        ['age', '-d', '-i', keyfile_path],
+                        input=input_bytes,
+                        capture_output=True,
+                        check=True
+                    )
+                    return result.stdout
+                finally:
+                    os.unlink(keyfile_path)
+            except Exception:
+                continue
+        return None
+
+    try:
+        entity = await client.get_entity(chat_id)
+        message = await client.get_messages(entity, ids=message_id)
+
+        if not message:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Messaggio non trovato (chat_id={chat_id}, message_id={message_id})"
+            )
+        if not message.media or not message.document:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Messaggio senza documento (chat_id={chat_id}, message_id={message_id})"
+            )
+
+        filename = None
+        for attr in (message.document.attributes or []):
+            if hasattr(attr, 'file_name'):
+                filename = attr.file_name
+                break
+
+        if not filename or not filename.endswith('.dat'):
+            raise HTTPException(status_code=400, detail="Documento non cifrato")
+
+        caption_text = message.message or ""
+        try:
+            caption_json = json.loads(caption_text)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Caption non valida")
+
+        cif_flag = caption_json.get('CIF') or caption_json.get('cif')
+        if cif_flag != "file":
+            raise HTTPException(status_code=400, detail="Caption non cifrata")
+
+        encrypted_metadata = caption_json.get('text')
+        if not encrypted_metadata:
+            raise HTTPException(status_code=400, detail="Caption mancante")
+
+        chat_id_cif = hashlib.sha256(pepper.encode() + str(chat_id).encode()).hexdigest()
+        candidate_privates = build_candidate_privates(chat_id_cif, message.date)
+        if not candidate_privates:
+            raise HTTPException(status_code=400, detail="Nessuna chiave disponibile")
+
+        decrypted_metadata_bytes = decrypt_with_age(encrypted_metadata, candidate_privates)
+        if not decrypted_metadata_bytes:
+            raise HTTPException(status_code=400, detail="Impossibile decifrare la caption")
+
+        try:
+            outer_metadata_str = decrypted_metadata_bytes.decode()
+            outer_metadata = json.loads(outer_metadata_str)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Metadata esterni non validi")
+
+        if outer_metadata.get('cif') != 'file':
+            raise HTTPException(status_code=400, detail="Metadata esterni non cifrati")
+
+        file_bytes = io.BytesIO()
+        await client.download_media(message, file=file_bytes)
+        file_bytes.seek(0)
+
+        encrypted_payload_bytes = file_bytes.getvalue()
+        decrypted_payload = decrypt_with_age(encrypted_payload_bytes, candidate_privates)
+        if not decrypted_payload:
+            raise HTTPException(status_code=400, detail="Impossibile decifrare il file")
+
+        if len(decrypted_payload) < 4:
+            raise HTTPException(status_code=400, detail="Payload non valido")
+
+        metadata_size = int.from_bytes(decrypted_payload[:4], byteorder='big')
+        if metadata_size <= 0 or metadata_size > len(decrypted_payload) - 4:
+            raise HTTPException(status_code=400, detail="Dimensione metadata non valida")
+
+        inner_metadata_bytes = decrypted_payload[4:4 + metadata_size]
+        file_content = decrypted_payload[4 + metadata_size:]
+
+        try:
+            inner_metadata_str = inner_metadata_bytes.decode('utf-8')
+            inner_metadata = json.loads(inner_metadata_str)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Metadata interni non validi")
+
+        if inner_metadata != outer_metadata:
+            raise HTTPException(status_code=409, detail="Metadata non corrispondenti")
+
+        out_filename = os.path.basename(inner_metadata.get('filename') or 'file.bin')
+        mime_type = inner_metadata.get('mime') or mimetypes.guess_type(out_filename)[0] or 'application/octet-stream'
+
+        return StreamingResponse(
+            iter([file_content]),
+            media_type=mime_type,
+            headers={
+                'Content-Disposition': f'attachment; filename="{out_filename}"',
+                'Cache-Control': 'no-store'
+            }
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ERROR download_encrypt_media: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=502, detail=f"Errore download: {str(e)}")

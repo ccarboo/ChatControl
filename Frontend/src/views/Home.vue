@@ -287,8 +287,55 @@
               if (bytes < k * k * k) return (bytes / (k * k)).toFixed(1) + ' MB'
               return (bytes / (k * k * k)).toFixed(1) + ' GB'
             },
-            handleFileClick(message) {
-              console.log('File clicked:', message)
+            async handleFileClick(message) {
+              if (!this.selectedChat || !message || !message.id) return
+
+              const parseFilename = (contentDisposition) => {
+                if (!contentDisposition) return null
+                const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
+                if (utf8Match && utf8Match[1]) {
+                  try {
+                    return decodeURIComponent(utf8Match[1])
+                  } catch {
+                    return utf8Match[1]
+                  }
+                }
+                const asciiMatch = contentDisposition.match(/filename="?([^";]+)"?/i)
+                return asciiMatch && asciiMatch[1] ? asciiMatch[1] : null
+              }
+
+              const tryDownload = async (url) => {
+                const res = await fetch(url, { credentials: 'include' })
+                if (!res.ok) return { ok: false, status: res.status }
+                const blob = await res.blob()
+                const headerName = parseFilename(res.headers.get('content-disposition'))
+                const filename = headerName || message.filename || 'file'
+
+                const blobUrl = window.URL.createObjectURL(blob)
+                const link = document.createElement('a')
+                link.href = blobUrl
+                link.download = filename
+                document.body.appendChild(link)
+                link.click()
+                link.remove()
+                window.URL.revokeObjectURL(blobUrl)
+                return { ok: true }
+              }
+
+              try {
+                const encryptedUrl = `${__API_URL__}/media/cifrato/download/${this.selectedChat.id}/${message.id}`
+                const plainUrl = `${__API_URL__}/media/download/${this.selectedChat.id}/${message.id}`
+
+                let result = await tryDownload(encryptedUrl)
+                if (!result.ok) {
+                  result = await tryDownload(plainUrl)
+                }
+                if (!result.ok) {
+                  this.errormsg = `Download fallito (${result.status})`
+                }
+              } catch (e) {
+                this.errormsg = e.message || 'Download fallito'
+              }
             }
         },
         watch: {
