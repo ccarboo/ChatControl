@@ -16,8 +16,14 @@ from config import pepper
 
 SECRET_KEY = secret_key.encode()
 cipher = Fernet(SECRET_KEY)
+MESSAGE_LIMIT = 4096
 
 login_cache = {}
+
+def split_message(text: str, limit: int = MESSAGE_LIMIT) -> list[str]:
+    if limit <= 0:
+        raise ValueError("limit must be > 0")
+    return [text[i:i + limit] for i in range(0, len(text), limit)]
 
 def deriva_master_key(passphrase: str, salt: bytes):
     kdf = Argon2id(salt=salt, length=32, iterations=2, memory_cost=65536, lanes=4)

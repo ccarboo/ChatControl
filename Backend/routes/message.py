@@ -6,7 +6,7 @@ from database.sqlite import get_connection
 from config import pepper
 import time
 import hashlib
-from utils import  is_logged_in, decifra_vault, cifra_con_age, genera_chiavi, cifra_vault, get_chat_chyper_keys, get_group_chyper_keys
+from utils import  is_logged_in, decifra_vault, cifra_con_age, genera_chiavi, cifra_vault, get_chat_chyper_keys, get_group_chyper_keys, split_message
 import json
 from fastapi import UploadFile, File, Form
 import subprocess
@@ -16,11 +16,12 @@ from telethon.tl.types import DocumentAttributeFilename
 import os
 import secrets
 import mimetypes
-
+import io
 
 router = APIRouter()
 
 CAPTION_LIMIT = 1024
+MESSAGE_LIMIT = 4096
 
 class message (BaseModel):
     text: str
@@ -31,8 +32,6 @@ class message (BaseModel):
 class iniz (BaseModel):
     chat_id: int
     
-
-
 
 @router.post("/messages/send/file")
 async def s_file(chat_id: int = Form(...), text: str = Form(""), cryph: bool = Form(False),group: bool = Form(False), file: UploadFile = File(...),login_session: str = Cookie(None)):
@@ -154,7 +153,13 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
 
     if not credentials.cryph:
         try:
-            await client.send_message(credentials.chat_id, credentials.text)
+            if len(credentials.text)>4096:
+                splitted_text = split_message(credentials.text)
+                for text in splitted_text:
+                    await client.send_message(credentials.chat_id, text)
+            else:
+                await client.send_message(credentials.chat_id, credentials.text)
+
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
         
@@ -175,11 +180,53 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
 
         json_da_cifrare = json.dumps(da_cifrare, sort_keys= True)
 
+
         text_cyp = cifra_con_age(json_da_cifrare, recipient_keys)
+
+            
         
         if text_cyp is None:
             raise HTTPException(status_code=500, detail="Errore durante la cifratura con age")
         
+        
+        if len(text_cyp) > MESSAGE_LIMIT:
+            token = secrets.token_hex(8)
+            nome_file = token + ".dat"
+            message_bytes = credentials.text.encode("utf-8")
+            message_metadata = {
+                "cif": "message",
+            }
+            json_metadata = json.dumps(message_metadata, sort_keys=True)
+            metadata_bytes = json_metadata.encode("utf-8")
+            metadata_size = len(metadata_bytes)
+            payload = metadata_size.to_bytes(4, byteorder="big") + metadata_bytes + message_bytes
+            encrypted_payload = cifra_con_age(payload, recipient_keys)
+            if encrypted_payload is None:
+                raise HTTPException(status_code=500, detail="Errore durante la cifratura con age")
+
+            if isinstance(encrypted_payload, str):
+                encrypted_payload = encrypted_payload.encode("utf-8")
+
+            file_in_ram = io.BytesIO(encrypted_payload)
+            file_in_ram.name = nome_file
+
+            caption = {
+                "cif":"message"
+            }
+
+            try:
+                file_in_ram.seek(0)
+                await client.send_file(
+                    credentials.chat_id,
+                    file_in_ram,
+                    caption=json.dumps(caption),
+                    force_document=True,
+                    attributes=[DocumentAttributeFilename(nome_file)]
+                )
+                return {"status": "ok"}
+            except Exception as e:
+                raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
+            
         finale = {
             "cif" : "on",
             "text" : text_cyp,
@@ -258,4 +305,3 @@ async def send_public_key(credentials: iniz, login_session: str = Cookie(None)):
         raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
     
     return {"status": "ok"}
-
