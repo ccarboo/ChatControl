@@ -9,7 +9,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export default defineConfig({
   plugins: [vue()],
   define: {
-    __API_URL__: JSON.stringify('https://server.apernici.it')
+    __API_URL__: JSON.stringify('https://server.apernici.it'),
+    __WEBSOCKETURL__:JSON.stringify('wss://server.apernici.it')
   },
   resolve: {
     alias: {

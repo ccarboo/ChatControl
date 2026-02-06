@@ -34,15 +34,11 @@
             }
         },
         methods: {
-            wsUrl(chatId) {
-              const base = __API_URL__.replace(/^http/, 'ws')
-              return `${base}/ws/chats/${chatId}`
-            },
             startChatEvents(chatId) {
               if (this.ws && this.wsChatId === chatId) return
               this.stopChatEvents()
 
-              const ws = new WebSocket(this.wsUrl(chatId))
+              const ws = new WebSocket(`${__WEBSOCKETURL__}/ws/chats/${chatId}`)
               this.ws = ws
               this.wsChatId = chatId
 
@@ -95,7 +91,7 @@
                 const ids = Array.isArray(payload.message_ids) ? payload.message_ids : []
                 if (ids.length === 0) return false
                 const before = this.messaggi.length
-                this.messaggi = this.messaggi.filter((m) => !ids.includes(m.id))
+                this.messaggi = this.messaggi.filter((m) => !ids.includes(m.id)) //filtra via id cancellati
                 for (const id of ids) {
                   this.animatedStickerLoaded.delete(id)
                   delete this.animatedStickerNodes[id]
@@ -382,7 +378,7 @@
                   this.$refs.fileInput.value = '';
                   this.loading = false
                   this.text = ''
-                  await this.reload_chat()
+                  await this.reload_chat(true)
               }
             },
             async handleSubmit(){

@@ -17,7 +17,8 @@ _message_index = {}
 _message_index_lock = asyncio.Lock()
 _MAX_INDEX_PER_CHAT = 3000
 
-
+#crea una struttura con al suo interno l'id utente, connesso ad ogni chat con un set ed una lista di id dei messaggi con eventi (la lista e' ordinata)
+#serve solo per alcuni raw update eliminazioni in chat singole per esempio
 async def index_messages(temp_id: str, chat_id: int, message_ids: list[int]):
     if not message_ids:
         return
@@ -223,7 +224,7 @@ def register_telethon_handlers(client, temp_id: str):
         await broadcast_event(temp_id, chat_id, payload)
 
     async def handle_raw_update(event):
-        update = event.update
+        update = getattr(event, "update", event)
         if isinstance(update, UpdateDeleteChannelMessages):
             chat_id = utils.get_peer_id(PeerChannel(update.channel_id))
             message_ids = list(update.messages or [])
