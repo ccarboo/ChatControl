@@ -13,6 +13,7 @@ from config import secret_key
 import hashlib
 import time
 from utils import deriva_master_key, cifra_vault, login_cache
+from realtime import register_telethon_handlers
 
 router = APIRouter()
 
@@ -147,6 +148,7 @@ async def sign_up_verify(credentials: signupped, signup_session: str = Cookie(No
         "time" : time.time(),
         "client" : client
     }
+    register_telethon_handlers(client, temp_id)
 
     response.set_cookie(
         key="login_session",
@@ -213,6 +215,7 @@ async def sign_up_verify_password(credentials: signupped_2fa, signup_session: st
         "time" : time.time(),
         "client" : client
     }
+    register_telethon_handlers(client, temp_id)
 
     response.set_cookie(
         key="login_session",

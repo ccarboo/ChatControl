@@ -11,6 +11,7 @@ from utils import deriva_master_key, decifra_vault, cipher, login_cache, cifra_v
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError
+from realtime import register_telethon_handlers
 
 
 router = APIRouter()
@@ -85,6 +86,7 @@ async def login_user(credentials: login_user, response: Response):
     await client.connect()
 
     if await client.is_user_authorized():
+        register_telethon_handlers(client, temp_id)
         pass
     else:
         try:
@@ -133,6 +135,7 @@ async def login_user_expired(credentials: code, login_session: str = Cookie(None
         except Exception as e:
             raise HTTPException(status_code=401, detail=str(e))
     temp_data['data']['session'] = session_str
+    register_telethon_handlers(client, temp_id)
 
     vault_ciphered = cifra_vault(temp_data['data'], temp_data['data']['masterkey'])
     username = hashlib.sha256(pepper.encode() + temp_data['data']['username'].encode()).hexdigest()

@@ -20,6 +20,26 @@ MESSAGE_LIMIT = 4096
 
 login_cache = {}
 
+def resolve_login_session(login_session: str):
+    if not login_session:
+        raise HTTPException(status_code=401, detail="Sessione mancante. Effettua il login.")
+    try:
+        temp_id = cipher.decrypt(login_session.encode()).decode()
+    except Exception:
+        raise HTTPException(status_code=401, detail="Sessione non valida. Riesegui il login.")
+
+    user_data = login_cache.get(temp_id)
+    if not user_data:
+        raise HTTPException(status_code=401, detail="Sessione scaduta. Riesegui il login.")
+
+    current_time = time.time()
+    if current_time - user_data['time'] > 1200:
+        login_cache.pop(temp_id, None)
+        raise HTTPException(status_code=401, detail="Sessione scaduta. riesegui il login")
+
+    user_data['time'] = time.time()
+    return temp_id, user_data
+
 def split_message(text: str, limit: int = MESSAGE_LIMIT) -> list[str]:
     if limit <= 0:
         raise ValueError("limit must be > 0")

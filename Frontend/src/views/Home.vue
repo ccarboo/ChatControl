@@ -19,16 +19,114 @@
                 chatReloadInterval: null,
                 animatedStickerNodes: {},
                 animatedStickerLoaded: new Set(),
-                topReachedMessageId: 50,
-                topReachedArmed: true,
+                pageSize: 50,
+                olderPageSize: 20,
+                loadingOlder: false,
+                hasMoreOlder: true,
                 lastChatsAt: 0,
                 lastReloadAt: 0,
                 chatsInFlight: false,
                 reloadInFlight: false,
                 dist : false,
+                ws: null,
+                wsChatId: null,
+                realtimeReloadTimer: null,
             }
         },
         methods: {
+            wsUrl(chatId) {
+              const base = __API_URL__.replace(/^http/, 'ws')
+              return `${base}/ws/chats/${chatId}`
+            },
+            startChatEvents(chatId) {
+              if (this.ws && this.wsChatId === chatId) return
+              this.stopChatEvents()
+
+              const ws = new WebSocket(this.wsUrl(chatId))
+              this.ws = ws
+              this.wsChatId = chatId
+
+              ws.onmessage = (event) => {
+                try {
+                  const payload = JSON.parse(event.data)
+                  this.handleChatEvent(payload)
+                } catch (e) {
+                  console.error('Errore parsing evento WS:', e)
+                }
+              }
+
+              ws.onclose = () => {
+                if (this.ws === ws) {
+                  this.ws = null
+                  this.wsChatId = null
+                }
+              }
+            },
+            stopChatEvents() {
+              if (this.ws) {
+                this.ws.close()
+                this.ws = null
+                this.wsChatId = null
+              }
+              if (this.realtimeReloadTimer) {
+                clearTimeout(this.realtimeReloadTimer)
+                this.realtimeReloadTimer = null
+              }
+            },
+            handleChatEvent(payload) {
+              if (!payload || !this.selectedChat) return
+              if (payload.chat_id !== this.selectedChat.id) return
+              if (payload.event_type === 'edited') {
+                this.reloadEditedMessage(payload)
+                return
+              }
+              const changed = this.applyChatEvent(payload)
+              if (!changed) {
+                this.queueRealtimeReload()
+                return
+              }
+              if (payload.event_type === 'new' && !this.dist) {
+                this.scrollToBottom()
+              }
+            },
+            applyChatEvent(payload) {
+              const type = payload.event_type
+              if (type === 'deleted') {
+                const ids = Array.isArray(payload.message_ids) ? payload.message_ids : []
+                if (ids.length === 0) return false
+                const before = this.messaggi.length
+                this.messaggi = this.messaggi.filter((m) => !ids.includes(m.id))
+                for (const id of ids) {
+                  this.animatedStickerLoaded.delete(id)
+                  delete this.animatedStickerNodes[id]
+                }
+                return this.messaggi.length !== before
+              }
+
+              const message = payload.message
+              if (!message || !message.id) return false
+
+              if (!message.chat_id) {
+                message.chat_id = payload.chat_id
+              }
+
+              const index = this.messaggi.findIndex((m) => m.id === message.id)
+              if (index === -1) {
+                this.messaggi = [...this.messaggi, message]
+                return true
+              }
+
+              const current = this.messaggi[index]
+              this.messaggi.splice(index, 1, { ...current, ...message })
+              return true
+            },
+            queueRealtimeReload() {
+              if (this.realtimeReloadTimer) return
+              this.realtimeReloadTimer = setTimeout(async () => {
+                this.realtimeReloadTimer = null
+                await this.reload_chat(true)
+              }, 250)
+            },
             setAnimatedStickerRef(messageId, el) {
               if (el) {
                 this.animatedStickerNodes[messageId] = el
@@ -99,19 +197,21 @@
             async selectChat(chat) {
               this.selectedChat = chat
               this.loading = true
+              this.startChatEvents(chat.id)
               let response
 
               // Reset animated stickers quando cambi chat
               this.animatedStickerLoaded.clear()
               this.animatedStickerNodes = {}
-              this.topReachedMessageId = 50
-              this.topReachedArmed = true
+              this.loadingOlder = false
+              this.hasMoreOlder = true
               this.messaggi = []
 
                 try {
-                  response = await api.get(`/chats/${chat.id}/limit/${this.topReachedMessageId}`, { withCredentials: true })
+                  response = await api.get(`/chats/${chat.id}/limit/${this.pageSize}/start/0`, { withCredentials: true })
                   console.log('messaggi ricevuti:', response.data)
                   this.messaggi = response.data.messages
+                  this.hasMoreOlder = (response.data.messages || []).length >= this.pageSize
                   
                   await this.init_chat(chat)
                   this.scrollToBottom()
@@ -126,23 +226,115 @@
                   this.loading = false
               }
             },
-            async reload_chat(){
+            async reload_chat(force = false, options = null){
               const now = Date.now()
-              if (this.reloadInFlight || now - this.lastReloadAt < 5000) return
+              if (!force && (this.reloadInFlight || now - this.lastReloadAt < 5000)) return null
               this.loading = true
               this.reloadInFlight = true
               let response
               let chat = this.selectedChat
+              const start = options?.start ?? 0
+              const limit = options?.limit ?? this.pageSize
               try {
-                  response = await api.get(`/chats/${chat.id}/limit/${this.topReachedMessageId}`, { withCredentials: true })
+                  response = await api.get(`/chats/${chat.id}/limit/${limit}/start/${start}`, { withCredentials: true })
                   console.log('messaggi ricevuti:', response.data)
-                  this.messaggi = response.data.messages
+                  this.mergeLatestMessages(response.data.messages)
                 this.lastReloadAt = now
+                return response.data.messages || []
               } catch (e) {
                   this.errormsg = e.response?.data?.message || e.message
               } finally {
                 this.reloadInFlight = false
                   this.loading = false
+              }
+              return null
+            },
+            async reloadEditedMessage(payload) {
+              const messageId = payload?.message?.id
+              if (!this.selectedChat || !messageId) {
+                this.queueRealtimeReload()
+                return
+              }
+
+              const idx = this.messaggi.findIndex((m) => m.id === messageId)
+              if (idx === -1) {
+                this.queueRealtimeReload()
+                return
+              }
+
+              const start = Math.max(0, this.messaggi.length - 1 - idx)
+              const limit = start + 1
+              try {
+                const updated = await this.reload_chat(true, { start, limit })
+                if (!updated || updated.length === 0) {
+                  this.queueRealtimeReload()
+                }
+              } catch (e) {
+                console.error('Errore reload messaggio editato:', e)
+                this.queueRealtimeReload()
+              }
+            },
+            mergeLatestMessages(latestMessages) {
+              if (!Array.isArray(latestMessages) || latestMessages.length === 0) return
+              if (this.messaggi.length === 0) {
+                this.messaggi = latestMessages
+                return
+              }
+
+              const existingIndex = new Map(this.messaggi.map((m, i) => [m.id, i]))
+              const merged = [...this.messaggi]
+              let changed = false
+
+              for (const msg of latestMessages) {
+                const idx = existingIndex.get(msg.id)
+                if (idx === undefined) {
+                  merged.push(msg)
+                  changed = true
+                  continue
+                }
+
+                merged[idx] = { ...merged[idx], ...msg }
+                changed = true
+              }
+
+              if (changed) {
+                this.messaggi = merged
+              }
+            },
+            async loadOlderMessages() {
+              if (!this.selectedChat || this.loadingOlder || !this.hasMoreOlder) return
+
+              const messagesDiv = this.$refs.messagesContainer
+              const prevScrollHeight = messagesDiv ? messagesDiv.scrollHeight : 0
+              const prevScrollTop = messagesDiv ? messagesDiv.scrollTop : 0
+
+              this.loadingOlder = true
+              try {
+                const start = this.messaggi.length
+                const response = await api.get(
+                  `/chats/${this.selectedChat.id}/limit/${this.olderPageSize}/start/${start}`,
+                  { withCredentials: true }
+                )
+                const older = response.data.messages || []
+                if (older.length === 0) {
+                  this.hasMoreOlder = false
+                  return
+                }
+
+                this.messaggi = [...older, ...this.messaggi]
+                if (older.length < this.olderPageSize) {
+                  this.hasMoreOlder = false
+                }
+
+                this.$nextTick(() => {
+                  if (!messagesDiv) return
+                  const newScrollHeight = messagesDiv.scrollHeight
+                  messagesDiv.scrollTop = newScrollHeight - prevScrollHeight + prevScrollTop
+                })
+              } catch (e) {
+                this.errormsg = e.response?.data?.message || e.message
+              } finally {
+                this.loadingOlder = false
               }
             },
             async sendMessage(){
@@ -308,18 +500,11 @@
               if (!messagesDiv || this.messaggi.length === 0) return
 
               const threshold = 8
-              const resetThreshold = 40
 
               const distanceFromBottom = messagesDiv.scrollHeight - (messagesDiv.scrollTop + messagesDiv.clientHeight)
               this.dist = distanceFromBottom > 200
-              if (messagesDiv.scrollTop <= threshold && this.topReachedArmed) {
-                this.topReachedMessageId = this.topReachedMessageId + 20
-                this.topReachedArmed = false
-                return
-              }
-
-              if (messagesDiv.scrollTop > resetThreshold) {
-                this.topReachedArmed = true
+              if (messagesDiv.scrollTop <= threshold) {
+                this.loadOlderMessages()
               }
             },
             formatFileSize(bytes) {
@@ -394,15 +579,16 @@
             this.chatsInterval = setInterval(() => {
                 this.get_chats()
             }, 20000)
-            this.chatReloadInterval = setInterval(() => {
+            /*this.chatReloadInterval = setInterval(() => {
                 if (this.selectedChat) {
                     this.reload_chat()
                 }
-            }, 5000)
+            }, 5000)*/
         },
         beforeUnmount() {
             if (this.chatsInterval) clearInterval(this.chatsInterval)
             if (this.chatReloadInterval) clearInterval(this.chatReloadInterval)
+          this.stopChatEvents()
         }
     }
 </script>

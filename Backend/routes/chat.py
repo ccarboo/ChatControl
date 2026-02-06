@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Cookie, Depends
+from fastapi import APIRouter, Cookie, Depends, WebSocket, WebSocketDisconnect
 import sqlite3
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -6,7 +6,8 @@ from database.sqlite import get_connection
 from config import pepper
 import time
 import hashlib
-from utils import decifra_vault, cifra_vault, is_logged_in, is_valid_age_public_key
+from utils import decifra_vault, cifra_vault, is_logged_in, is_valid_age_public_key, resolve_login_session
+from realtime import connect_socket, disconnect_socket, register_telethon_handlers, index_messages
 from telethon.tl.types import DocumentAttributeAnimated
 from datetime import datetime
 import json
@@ -15,6 +16,29 @@ import subprocess
 import tempfile
                                 
 router = APIRouter()
+
+@router.websocket("/ws/chats/{chat_id}")
+async def chat_events(websocket: WebSocket, chat_id: int):
+    login_session = websocket.cookies.get("login_session")
+    try:
+        temp_id, data = resolve_login_session(login_session)
+    except HTTPException:
+        await websocket.close(code=1008)
+        return
+
+    client = data["client"]
+    if not client.is_connected():
+        await client.connect()
+
+    register_telethon_handlers(client, temp_id)
+    await connect_socket(temp_id, chat_id, websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await disconnect_socket(temp_id, chat_id, websocket)
 
 
 def is_group_chat_id(chat_id: int) -> bool:
@@ -84,9 +108,9 @@ async def get_chats(login_session: str = Cookie(None), offset_date: str = None):
 
     return {"chats": chats}
 
-@router.get("/chats/{chat_id}/limit/{limit}")
-async def get_chat_messages(chat_id: int, limit: int, login_session: str = Cookie(None)):
-    data = is_logged_in(login_session)
+@router.get("/chats/{chat_id}/limit/{limit}/start/{start}")
+async def get_chat_messages(chat_id: int, limit: int, start: int, login_session: str = Cookie(None)):
+    temp_id, data = resolve_login_session(login_session)
     chat_id_cif = hashlib.sha256(pepper.encode() + str(chat_id).encode()).hexdigest()
 
     
@@ -104,7 +128,11 @@ async def get_chat_messages(chat_id: int, limit: int, login_session: str = Cooki
     my_id = me.id if me else None
 
     messages = []
-    async for msg in client.iter_messages(entity, limit=limit):
+    add_offset = start if start and start > 0 else 0
+    iter_kwargs = {"limit": limit}
+    if add_offset:
+        iter_kwargs["add_offset"] = add_offset
+    async for msg in client.iter_messages(entity, **iter_kwargs):
         sender = await msg.get_sender()
         message_data = {
             'id': msg.id,
@@ -166,6 +194,8 @@ async def get_chat_messages(chat_id: int, limit: int, login_session: str = Cooki
                 message_data['mime'] = msg.video.mime_type if hasattr(msg.video, 'mime_type') else 'video/mp4'
         
         messages.append(message_data)
+
+    await index_messages(temp_id, chat_id, [m.get("id") for m in messages if m.get("id") is not None])
 
     messages.reverse()  
 
