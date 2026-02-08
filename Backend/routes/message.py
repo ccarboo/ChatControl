@@ -29,9 +29,28 @@ class message (BaseModel):
     cryph: bool
     group: bool
 
+class delete_m(BaseModel):
+    chat_id: int
+    message_id: int
+
 class iniz (BaseModel):
     chat_id: int
     
+@router.post("/messages/delete")
+async def delete(message: delete_m, login_session: str = Cookie(None)):
+    data = is_logged_in(login_session)
+    client = data['client']
+
+    if not client.is_connected():
+        await client.connect()
+    try:
+        await client.delete_messages(message.chat_id, [message.message_id], revoke=True)
+        fetched = await client.get_messages(message.chat_id, ids=message.message_id)
+        if fetched is None or getattr(fetched, "deleted", False):
+            return {"status": "ok"}
+        return {"status": "not_deleted"}
+    except Exception:
+        raise HTTPException(status_code=502, detail="Non hai il permesso di cancellare questo messaggio")
 
 @router.post("/messages/send/file")
 async def s_file(chat_id: int = Form(...), text: str = Form(""), cryph: bool = Form(False),group: bool = Form(False), file: UploadFile = File(...),login_session: str = Cookie(None)):

@@ -31,6 +31,12 @@
                 ws: null,
                 wsChatId: null,
                 realtimeReloadTimer: null,
+                contextMenuVisible: false,
+                contextMenuPos: { x: 0, y: 0 },
+                contextMenuMessage: null,
+                longPressTimer: null,
+                longPressStart: null,
+                longPressDelay: 550,
             }
         },
         methods: {
@@ -195,6 +201,7 @@
               }
             },
             async selectChat(chat) {
+              this.closeMessageMenu()
               this.selectedChat = chat
               this.loading = true
               this.startChatEvents(chat.id)
@@ -493,6 +500,9 @@
               })
             },
             handleMessagesScroll() {
+              if (this.contextMenuVisible) {
+                this.closeMessageMenu()
+              }
               const messagesDiv = this.$refs.messagesContainer
               if (!messagesDiv || this.messaggi.length === 0) return
 
@@ -511,6 +521,104 @@
               if (bytes < k * k) return (bytes / k).toFixed(1) + ' KB'
               if (bytes < k * k * k) return (bytes / (k * k)).toFixed(1) + ' MB'
               return (bytes / (k * k * k)).toFixed(1) + ' GB'
+            },
+            openMessageMenu(event, message) {
+              if (!message) return
+              event.preventDefault()
+              event.stopPropagation()
+              this.openMessageMenuAt(event.clientX, event.clientY, message)
+            },
+            openMessageMenuAt(x, y, message) {
+              this.contextMenuVisible = true
+              this.contextMenuMessage = message
+              this.contextMenuPos = { x, y }
+              this.$nextTick(() => this.adjustMessageMenuPosition())
+            },
+            adjustMessageMenuPosition() {
+              const menu = this.$refs.messageContextMenu
+              if (!menu) return
+              const rect = menu.getBoundingClientRect()
+              const padding = 8
+              let x = this.contextMenuPos.x
+              let y = this.contextMenuPos.y
+
+              if (x + rect.width + padding > window.innerWidth) {
+                x = window.innerWidth - rect.width - padding
+              }
+              if (y + rect.height + padding > window.innerHeight) {
+                y = window.innerHeight - rect.height - padding
+              }
+              if (x < padding) x = padding
+              if (y < padding) y = padding
+
+              this.contextMenuPos = { x, y }
+            },
+            closeMessageMenu() {
+              this.contextMenuVisible = false
+              this.contextMenuMessage = null
+              this.clearLongPressTimer()
+            },
+            async handleMessageAction(action) {
+              const message = this.contextMenuMessage
+              if (!message) return
+
+              if (action === 'reply') {
+                const senderName = message.out ? 'Tu' : (message.sender_username || message.sender_id || 'utente')
+                const body = message.text ? message.text.trim() : ''
+                const replyText = body ? `@${senderName}: ${body}` : `@${senderName}:`
+                this.text = this.text ? `${this.text} ${replyText}` : replyText
+              } else {
+                this.errormsg = 'Azione non ancora disponibile'
+              }
+              if (action === 'delete') {
+                try {
+                  const response = await api.post(
+                    `/messages/delete`,
+                    { chat_id: this.selectedChat.id, message_id: message.id },
+                    { withCredentials: true }
+                  )
+                  if (response?.data?.status === 'ok') {
+                    this.messaggi = this.messaggi.filter((m) => m.id !== message.id)
+                    this.animatedStickerLoaded.delete(message.id)
+                    delete this.animatedStickerNodes[message.id]
+                  } else {
+                    this.errormsg = response?.data?.detail || 'Cancellazione fallita'
+                  }
+                } catch (e) {
+                  this.errormsg = e.response?.data?.message || e.message
+                } finally {
+                  this.loading = false
+                }
+              }
+
+              this.closeMessageMenu()
+            },
+            handleMessageTouchStart(event, message) {
+              if (!event.touches || event.touches.length !== 1) return
+              const touch = event.touches[0]
+              this.longPressStart = { x: touch.clientX, y: touch.clientY }
+              this.clearLongPressTimer()
+              this.longPressTimer = setTimeout(() => {
+                this.openMessageMenuAt(touch.clientX, touch.clientY, message)
+              }, this.longPressDelay)
+            },
+            handleMessageTouchMove(event) {
+              if (!this.longPressTimer || !this.longPressStart || !event.touches || event.touches.length !== 1) return
+              const touch = event.touches[0]
+              const dx = Math.abs(touch.clientX - this.longPressStart.x)
+              const dy = Math.abs(touch.clientY - this.longPressStart.y)
+              if (dx + dy > 12) {
+                this.clearLongPressTimer()
+              }
+            },
+            handleMessageTouchEnd() {
+              this.clearLongPressTimer()
+            },
+            clearLongPressTimer() {
+              if (this.longPressTimer) {
+                clearTimeout(this.longPressTimer)
+                this.longPressTimer = null
+              }
             },
             async handleFileClick(message) {
               if (!this.selectedChat || !message || !message.id) return
@@ -595,6 +703,7 @@
         beforeUnmount() {
             if (this.chatsInterval) clearInterval(this.chatsInterval)
             if (this.chatReloadInterval) clearInterval(this.chatReloadInterval)
+          this.clearLongPressTimer()
           this.stopChatEvents()
         }
     }
@@ -659,6 +768,11 @@
                :key="m.id" 
                class="message-wrapper"
                :class="{ 'message-out': m.out, 'message-in': !m.out }"
+               @contextmenu.prevent="openMessageMenu($event, m)"
+               @touchstart="handleMessageTouchStart($event, m)"
+               @touchmove="handleMessageTouchMove($event)"
+               @touchend="handleMessageTouchEnd"
+               @touchcancel="handleMessageTouchEnd"
              >
                <div class="message-bubble">
                  <div class="message-header" >
@@ -725,6 +839,19 @@
                    {{ new Date(m.date).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }) }}
                  </div>
                </div> 
+             </div>
+             <div v-if="contextMenuVisible" class="message-context-backdrop" @click="closeMessageMenu"></div>
+             <div
+               v-if="contextMenuVisible"
+               ref="messageContextMenu"
+               class="message-context-menu"
+               :style="{ top: contextMenuPos.y + 'px', left: contextMenuPos.x + 'px' }"
+               @click.stop
+             >
+               <button type="button" class="message-context-item" @click="handleMessageAction('reply')">Rispondi</button>
+               <button type="button" class="message-context-item" @click="handleMessageAction('edit')">Modifica</button>
+               <button type="button" class="message-context-item" @click="handleMessageAction('pin')">Pin</button>
+               <button type="button" class="message-context-item danger" @click="handleMessageAction('delete')">Elimina</button>
              </div>
           </div>
           <button
@@ -828,6 +955,42 @@
   bottom: 16px;
   z-index: 5;
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+}
+
+.message-context-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+
+.message-context-menu {
+  position: fixed;
+  z-index: 21;
+  min-width: 160px;
+  padding: 6px;
+  background-color: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.15);
+}
+
+.message-context-item {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  color: #111827;
+}
+
+.message-context-item:hover {
+  background-color: #f3f4f6;
+}
+
+.message-context-item.danger {
+  color: #b91c1c;
 }
 
 .message-wrapper {
