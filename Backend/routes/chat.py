@@ -288,7 +288,8 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                     raise HTTPException(status_code=500, detail=str(error))
 
                 if pubblic not in [k['chiave'] for k in all_keys]:
-                    new_key_timestamp = time.time()
+                    msg_date = message.get('date')
+                    new_key_timestamp = msg_date.timestamp() if msg_date else time.time()
                     new_key = {
                         'chiave': pubblic,
                         'inizio': new_key_timestamp,

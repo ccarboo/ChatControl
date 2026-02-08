@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Cookie
+import asyncio
 import sqlite3
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -35,6 +36,20 @@ class delete_m(BaseModel):
 
 class iniz (BaseModel):
     chat_id: int
+
+async def wait_for_public_key_message(client, chat_id: int, public_key: str, timeout: float = 2.0, interval: float = 0.2) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            messages = await client.get_messages(chat_id, limit=10)
+        except Exception:
+            messages = []
+        for msg in messages or []:
+            text = getattr(msg, "message", None) or getattr(msg, "text", None) or ""
+            if '"cif"' in text and '"in"' in text and public_key in text:
+                return True
+        await asyncio.sleep(interval)
+    return False
     
 @router.post("/messages/delete")
 async def delete(message: delete_m, login_session: str = Cookie(None)):
@@ -183,6 +198,26 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
             raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
         
     else:
+        chat_id_hash = hashlib.sha256(pepper.encode() + str(credentials.chat_id).encode()).hexdigest()
+        chat_data = data.get('data', {}).get('chats', {}).get(chat_id_hash, {})
+        chiave_corrente_chat = chat_data.get('chiave', {})
+
+        if not chiave_corrente_chat or not chiave_corrente_chat.get('pubblica'):
+            key_response = await send_public_key(iniz(chat_id=credentials.chat_id), login_session)
+            public_key = key_response.get("public") if isinstance(key_response, dict) else None
+            if public_key:
+                key_visible = await wait_for_public_key_message(client, credentials.chat_id, public_key)
+                if not key_visible:
+                    raise HTTPException(status_code=503, detail="Chiave non visibile in chat, riprova")
+            chat_data = data.get('data', {}).get('chats', {}).get(chat_id_hash, {})
+            chiave_corrente_chat = chat_data.get('chiave', {})
+
+        inizio_corrente = chiave_corrente_chat.get('inizio') if chiave_corrente_chat else None
+        if inizio_corrente:
+            elapsed = time.time() - inizio_corrente
+            if elapsed < 2.5:
+                await asyncio.sleep(2.5 - elapsed)
+
         if credentials.group:
             
             recipient_keys = get_group_chyper_keys(data, credentials.chat_id)
@@ -323,4 +358,4 @@ async def send_public_key(credentials: iniz, login_session: str = Cookie(None)):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
     
-    return {"status": "ok"}
+    return {"status": "ok", "public": pubblica}
