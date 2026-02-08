@@ -734,6 +734,21 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
     except sqlite3.Error as error:
         raise HTTPException(status_code=500, detail=str(error))
 
+    vault_dirty = False
+    if is_group:
+        ids = set()
+        async for user in client.iter_participants(chat_id):
+            ids.add(str(user.id))
+
+        if 'partecipanti' in vault_deciphered:
+            stale_ids = [pid for pid in vault_deciphered['partecipanti'].keys() if pid not in ids]
+            if stale_ids:
+                print(f"get_init_messages: removing participants not in group: {stale_ids}")
+            for pid in stale_ids:
+                del vault_deciphered['partecipanti'][pid]
+            if stale_ids:
+                vault_dirty = True
+
     all_keys = []
     if is_group and 'partecipanti' in vault_deciphered:
         for participant_data in vault_deciphered['partecipanti'].values():
@@ -783,8 +798,9 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
             
             existing_keys.add(pubblic)
             keys_added += 1
+            vault_dirty = True
 
-    if keys_added > 0:
+    if vault_dirty:
         vault_cifrato = cifra_vault(vault_deciphered, data['data']['masterkey'])
         try:
             with get_connection() as conn:

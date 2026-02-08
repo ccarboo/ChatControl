@@ -40,6 +40,10 @@ def resolve_login_session(login_session: str):
     user_data['time'] = time.time()
     return temp_id, user_data
 
+
+def get_user_data_by_temp_id(temp_id: str):
+    return login_cache.get(temp_id)
+
 def split_message(text: str, limit: int = MESSAGE_LIMIT) -> list[str]:
     if limit <= 0:
         raise ValueError("limit must be > 0")

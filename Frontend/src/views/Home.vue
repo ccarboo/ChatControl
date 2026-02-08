@@ -72,6 +72,10 @@
             handleChatEvent(payload) {
               if (!payload || !this.selectedChat) return
               if (payload.chat_id !== this.selectedChat.id) return
+              if (payload.event_type === 'new' && this.isEncryptedPayload(payload.message)) {
+                this.queueRealtimeReload()
+                return
+              }
               if (payload.event_type === 'edited') {
                 this.reloadEditedMessage(payload)
                 return
@@ -207,7 +211,7 @@
                   response = await api.get(`/chats/${chat.id}/limit/${this.pageSize}/start/0`, { withCredentials: true })
                   console.log('messaggi ricevuti:', response.data)
                   this.messaggi = response.data.messages
-                  this.hasMoreOlder = (response.data.messages || []).length >= this.pageSize
+                  this.hasMoreOlder = (response.data.messages || []).length > 0
                   
                   await this.init_chat(chat)
                   this.scrollToBottom()
@@ -318,9 +322,6 @@
                 }
 
                 this.messaggi = [...older, ...this.messaggi]
-                if (older.length < this.olderPageSize) {
-                  this.hasMoreOlder = false
-                }
 
                 this.$nextTick(() => {
                   if (!messagesDiv) return
@@ -560,7 +561,17 @@
               } catch (e) {
                 this.errormsg = e.message || 'Download fallito'
               }
-            }
+            },
+            isEncryptedPayload(message) {
+              if (!message || !message.text) return false
+              try {
+                const parsed = JSON.parse(message.text)
+                const flag = parsed?.CIF || parsed?.cif
+                return flag === 'on' || flag === 'file' || flag === 'message' || flag === 'in'
+              } catch {
+                return false
+              }
+            },
         },
         watch: {
           messaggi: {

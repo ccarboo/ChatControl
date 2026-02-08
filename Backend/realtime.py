@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import sqlite3
 from fastapi import WebSocket
 from telethon import events, utils
 from telethon.tl.types import (
@@ -7,6 +9,9 @@ from telethon.tl.types import (
     UpdateDeleteChannelMessages,
     UpdateDeleteMessages,
 )
+from config import pepper
+from database.sqlite import get_connection
+from utils import cifra_vault, decifra_vault, get_user_data_by_temp_id
 
 # temp_id -> chat_id -> set[WebSocket]
 _active_connections = {}
@@ -16,6 +21,58 @@ _connections_lock = asyncio.Lock()
 _message_index = {}
 _message_index_lock = asyncio.Lock()
 _MAX_INDEX_PER_CHAT = 3000
+
+
+def _is_group_chat_id(chat_id: int) -> bool:
+    try:
+        return int(chat_id) < 0
+    except Exception:
+        return False
+
+
+async def _remove_user_from_vault(temp_id: str, chat_id: int, user_id: int | None):
+    user_data = get_user_data_by_temp_id(temp_id)
+    if not user_data:
+        return
+
+    if user_id is not None and not _is_group_chat_id(chat_id):
+        if str(user_id) != str(chat_id):
+            return
+
+    username = hashlib.sha256(pepper.encode() + user_data['data']['username'].encode()).hexdigest()
+    chat_id_cif = hashlib.sha256(pepper.encode() + str(chat_id).encode()).hexdigest()
+    is_group = _is_group_chat_id(chat_id)
+
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            if is_group:
+                cursor.execute(
+                    """SELECT vault FROM contatti_gruppo WHERE proprietario = ? AND gruppo_id = ?""",
+                    (username, chat_id_cif)
+                )
+                risultato = cursor.fetchone()
+                if not risultato or not risultato[0]:
+                    return
+                vault_deciphered = decifra_vault(risultato[0], user_data['data']['masterkey'])
+                partecipanti = vault_deciphered.get('partecipanti')
+                if not partecipanti or str(user_id) not in partecipanti:
+                    return
+                del partecipanti[str(user_id)]
+                vault_cifrato = cifra_vault(vault_deciphered, user_data['data']['masterkey'])
+                cursor.execute(
+                    """UPDATE contatti_gruppo SET vault = ? WHERE proprietario = ? AND gruppo_id = ?""",
+                    (vault_cifrato, username, chat_id_cif)
+                )
+                conn.commit()
+            else:
+                cursor.execute(
+                    """DELETE FROM contatti WHERE proprietario = ? AND contatto_id = ?""",
+                    (username, chat_id_cif)
+                )
+                conn.commit()
+    except sqlite3.Error as error:
+        print(f"ERROR remove_user_from_vault: {error}")
 
 #crea una struttura con al suo interno l'id utente, connesso ad ogni chat con un set ed una lista di id dei messaggi con eventi (la lista e' ordinata)
 #serve solo per alcuni raw update eliminazioni in chat singole per esempio
@@ -250,8 +307,23 @@ def register_telethon_handlers(client, temp_id: str):
             }
             await broadcast_event(temp_id, chat_id, payload)
 
+    async def handle_chat_action(event):
+        if not event.chat_id:
+            return
+        if not (getattr(event, "user_left", False) or getattr(event, "user_kicked", False)):
+            return
+        user_ids = []
+        if getattr(event, "user_id", None):
+            user_ids.append(event.user_id)
+        elif getattr(event, "user_ids", None):
+            user_ids.extend(list(event.user_ids))
+
+        for uid in user_ids:
+            await _remove_user_from_vault(temp_id, event.chat_id, uid)
+
     client.add_event_handler(handle_new_message, events.NewMessage())
     client.add_event_handler(handle_edited_message, events.MessageEdited())
     client.add_event_handler(handle_deleted_message, events.MessageDeleted())
     client.add_event_handler(handle_raw_update, events.Raw())
+    client.add_event_handler(handle_chat_action, events.ChatAction())
     client._cc_handlers_added = True
