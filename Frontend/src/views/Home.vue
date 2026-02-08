@@ -24,9 +24,7 @@
                 loadingOlder: false,
                 hasMoreOlder: true,
                 lastChatsAt: 0,
-                lastReloadAt: 0,
-                chatsInFlight: false,
-                reloadInFlight: false,
+                  chatsInFlight: false,
                 dist : false,
                 ws: null,
                 wsChatId: null,
@@ -127,11 +125,11 @@
               return true
             },
             queueRealtimeReload() {
-              if (this.realtimeReloadTimer) return
-              this.realtimeReloadTimer = setTimeout(async () => {
+              if (this.realtimeReloadTimer) {
+                clearTimeout(this.realtimeReloadTimer)
                 this.realtimeReloadTimer = null
-                await this.reload_chat(true)
-              }, 250)
+              }
+              this.reload_chat(true)
             },
             setAnimatedStickerRef(messageId, el) {
               if (el) {
@@ -235,9 +233,7 @@
             },
             async reload_chat(force = false, options = null){
               const now = Date.now()
-              if (!force && (this.reloadInFlight || now - this.lastReloadAt < 5000)) return null
-              this.loading = true
-              this.reloadInFlight = true
+                this.loading = true
               let response
               let chat = this.selectedChat
               const start = options?.start ?? 0
@@ -246,12 +242,10 @@
                   response = await api.get(`/chats/${chat.id}/limit/${limit}/start/${start}`, { withCredentials: true })
                   console.log('messaggi ricevuti:', response.data)
                   this.mergeLatestMessages(response.data.messages)
-                this.lastReloadAt = now
                 return response.data.messages || []
               } catch (e) {
                   this.errormsg = e.response?.data?.message || e.message
               } finally {
-                this.reloadInFlight = false
                   this.loading = false
               }
               return null
@@ -387,6 +381,7 @@
                   this.loading = false
                   this.text = ''
                   await this.reload_chat(true)
+                  this.scrollToBottom()
               }
             },
             async handleSubmit(){
@@ -411,6 +406,7 @@
                     }, { withCredentials: true })
                     this.text = ''
                     await this.reload_chat()
+                    this.scrollToBottom()
                 } catch (e) {
                     this.errormsg = e.response?.data?.message || e.message
                 } finally {
@@ -439,6 +435,7 @@
                     this.loading = false
                     this.text = ''
                     await this.reload_chat()
+                    this.scrollToBottom()
                   }
                 }
                 else if(this.file && !this.text){
@@ -462,6 +459,7 @@
                     this.loading = false
                     this.text = ''
                     await this.reload_chat()
+                    this.scrollToBottom()
                   }
                 }
               }
