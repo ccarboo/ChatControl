@@ -350,7 +350,6 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                     
             if cif_flag == "on":
                 text = message['json'].get('text')
-   
                 timestamp = message.get('date')
 
                 timestamp_unix = timestamp.timestamp() if timestamp else None
@@ -429,13 +428,31 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                 if text_decifrato:
                     try:
                         dizionario = json.loads(text_decifrato)
+                        
                         if dizionario['cif'] == "on":
+                            tempo_decifrato = dizionario.get('timestamp')
+                            timestamp = message.get('date')
+                            diff_seconds = None
+                            if timestamp and tempo_decifrato is not None:
+                                try:
+                                    diff_seconds = abs(timestamp.timestamp() - float(tempo_decifrato))
+                                except (TypeError, ValueError):
+                                    diff_seconds = None
+
+                            if diff_seconds is not None and diff_seconds > 30:
+                                message['error'] = "questo messaggio e' frutto di un replay attack"
+                                if 'json' in message:
+                                    del message['json']
+                                message['is_json'] = False
+                                continue
+
                             message['text'] = dizionario['text']
+                            
                             if 'json' in message:
                                 del message['json']
                             message['is_json'] = False
                         else:
-                            message['error'] = "on"
+                            message['error'] = "attenzione messaggio modificato"
                             if 'json' in message:
                                 del message['json']
                             message['is_json'] = False
@@ -525,6 +542,30 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                     try:
                         dizionario = json.loads(text_decifrato)
                         if dizionario['cif'] == "file":
+                            tempo_decifrato = dizionario.get('timestamp')
+                            timestamp = message.get('date')
+                            diff_seconds = None
+                            if timestamp and tempo_decifrato is not None:
+                                try:
+                                    diff_seconds = abs(timestamp.timestamp() - float(tempo_decifrato))
+                                except (TypeError, ValueError):
+                                    diff_seconds = None
+                            allowed_seconds = 30
+                            file_size = dizionario.get('size')
+                            if file_size is not None:
+                                try:
+                                    file_size = float(file_size)
+                                    # Allow more time for larger files on slow networks.
+                                    allowed_seconds = max(30, file_size / (32 * 1024))
+                                except (TypeError, ValueError):
+                                    allowed_seconds = 30
+
+                            if diff_seconds is not None and diff_seconds > allowed_seconds:
+                                message['error'] = "questo messaggio e' frutto di un replay attack"
+                                if 'json' in message:
+                                    del message['json']
+                                message['is_json'] = False
+                                continue
                             message['file'] = True
                             message['filename'] = dizionario['filename']
                             message['text'] = dizionario['text']
@@ -639,6 +680,23 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                                 inner_metadata = None
 
                             if inner_metadata and inner_metadata.get('cif') == 'message':
+
+                                tempo_decifrato = inner_metadata.get('timestamp')
+                                timestamp = message.get('date')
+                                diff_seconds = None
+                                if timestamp and tempo_decifrato is not None:
+                                    try:
+                                        diff_seconds = abs(timestamp.timestamp() - float(tempo_decifrato))
+                                    except (TypeError, ValueError):
+                                        diff_seconds = None
+
+                                if diff_seconds is not None and diff_seconds > 30:
+                                    message['error'] = "questo messaggio e' frutto di un replay attack"
+                                    if 'json' in message:
+                                        del message['json']
+                                    message['is_json'] = False
+                                    continue
+
                                 message['text'] = message_bytes.decode('utf-8', errors='replace')
                                 if 'json' in message:
                                     del message['json']

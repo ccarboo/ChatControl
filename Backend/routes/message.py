@@ -23,6 +23,7 @@ router = APIRouter()
 
 CAPTION_LIMIT = 1024
 MESSAGE_LIMIT = 4096
+MIN_UPLOAD_BPS = 32 * 1024
 
 class message (BaseModel):
     text: str
@@ -106,19 +107,18 @@ async def s_file(chat_id: int = Form(...), text: str = Form(""), cryph: bool = F
             recipient_keys = get_chat_chyper_keys(data, chat_id)
         
         try:
-            # Leggi il contenuto del file
             file_content = await file.read()
             
             guessed_mime, _ = mimetypes.guess_type(file.filename)
             mime_type = guessed_mime or file.content_type or "application/octet-stream"
 
-            # Crea il JSON metadata
             metadata = {
                 "filename": file.filename,
                 "cif": "file",
                 "text": text,
                 "mime": mime_type,
                 "size": len(file_content),
+                "timestamp": time.time()
             }
 
             json_metadata = json.dumps(metadata, sort_keys=True)
@@ -128,10 +128,8 @@ async def s_file(chat_id: int = Form(...), text: str = Form(""), cryph: bool = F
             metadata_bytes = json_metadata.encode('utf-8')
             metadata_size = len(metadata_bytes)
             
-            # Crea il payload: [dimensione_metadata(4 bytes)] + [metadata] + [file_content]
             payload = metadata_size.to_bytes(4, byteorder='big') + metadata_bytes + file_content
             
-            # Cifra il payload completo con age
             encrypted_payload = cifra_con_age(payload, recipient_keys)
             
             if encrypted_payload is None:
@@ -155,16 +153,26 @@ async def s_file(chat_id: int = Form(...), text: str = Form(""), cryph: bool = F
             testo_str = json.dumps(testo)
 
             if len(testo_str) <= CAPTION_LIMIT:
-                await client.send_file(
-                    chat_id,
-                    tmp_path,
-                    caption=testo_str,
-                    force_document=True,
-                    attributes=[DocumentAttributeFilename(nome_file)]
-                )
-                
-                os.remove(tmp_path)
-                
+                start_time = time.monotonic()
+
+                async def progress_cb(current, total):
+                    elapsed = time.monotonic() - start_time
+                    if elapsed >= 1.0 and (current / max(elapsed, 0.001)) < MIN_UPLOAD_BPS:
+                        raise Exception("Connessione troppo lenta")
+
+                try:
+                    await client.send_file(
+                        chat_id,
+                        tmp_path,
+                        caption=testo_str,
+                        force_document=True,
+                        attributes=[DocumentAttributeFilename(nome_file)],
+                        progress_callback=progress_cb
+                    )
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+
                 return {"status": "ok"}
             else:
                 raise HTTPException(
@@ -230,6 +238,7 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
         da_cifrare ={
             "cif" : "on",
             "text" : credentials.text,
+            "timestamp": time.time()
         }
 
         json_da_cifrare = json.dumps(da_cifrare, sort_keys= True)
@@ -249,6 +258,7 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
             message_bytes = credentials.text.encode("utf-8")
             message_metadata = {
                 "cif": "message",
+                "timestamp": time.time()
             }
             json_metadata = json.dumps(message_metadata, sort_keys=True)
             metadata_bytes = json_metadata.encode("utf-8")

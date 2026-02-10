@@ -350,7 +350,7 @@
                   formData.append('cryph',false)
                   formData.append('group',this.selectedChat.is_group)
                   await api.post('/messages/send/file', formData,
-                   { withCredentials: true , headers: { 'Content-Type': 'multipart/form-data' }})
+                   { withCredentials: true })
                   
                 }
                 else if(this.file && !this.text){
@@ -362,7 +362,7 @@
                   formData.append('group',this.selectedChat.is_group)
 
                   await api.post('/messages/send/file', formData,
-                   { withCredentials: true , headers: { 'Content-Type': 'multipart/form-data' }})
+                   { withCredentials: true })
                 }
                 else if(this.text.trim().length !== 0){
                   await api.post('/messages/send', {
@@ -424,7 +424,7 @@
                   formData.append('group',this.selectedChat.is_group)
                   try{
                     await api.post('/messages/send/file', formData,
-                    { withCredentials: true , headers: { 'Content-Type': 'multipart/form-data' }})
+                    { withCredentials: true })
                   }
                   catch(e){
                     this.errormsg = e.response?.data?.message || e.message
@@ -448,7 +448,7 @@
                   formData.append('group',this.selectedChat.is_group)
                   try{
                     await api.post('/messages/send/file', formData,
-                    { withCredentials: true , headers: { 'Content-Type': 'multipart/form-data' }})
+                    { withCredentials: true })
                   }
                   catch(e){
                     this.errormsg = e.response?.data?.message || e.message
@@ -772,7 +772,7 @@
                @touchend="handleMessageTouchEnd"
                @touchcancel="handleMessageTouchEnd"
              >
-               <div class="message-bubble">
+               <div class="message-bubble" :class="{ 'message-error': m.error }">
                  <div class="message-header" >
                    {{ m.out ? 'Tu' : (m.sender_username || m.sender_id) }}
                  </div>
@@ -831,7 +831,11 @@
                     {{ m.text }}
                   </div>
                   <div class="message-text" v-else>
-                      messaggio compromesso!!
+                      {{m.error}}<img 
+                    src="/alert-triangle.svg"  
+                    alt="Invia"
+                    class="send-icon"
+                  >
                   </div>
                  <div class="message-time">
                    {{ new Date(m.date).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }) }}
@@ -1042,6 +1046,21 @@
 .message-text {
   margin-bottom: 4px;
   line-height: 1.4;
+}
+
+.message-bubble.message-error {
+  background-color: #fee2e2;
+  border: 1px solid #fecaca;
+  color: #7f1d1d;
+}
+
+.message-error .message-text {
+  color: #7f1d1d;
+}
+
+.message-error .message-time {
+  color: #7f1d1d;
+  opacity: 0.6;
 }
 
 .message-time {
