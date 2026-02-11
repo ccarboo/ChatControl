@@ -98,6 +98,8 @@ async def s_file(chat_id: int = Form(...), text: str = Form(""), cryph: bool = F
             raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
 
     else:
+        id_messagge = secrets.token_hex(16)
+
         token = secrets.token_hex(8)
         nome_file = token + ".dat"
         
@@ -118,7 +120,8 @@ async def s_file(chat_id: int = Form(...), text: str = Form(""), cryph: bool = F
                 "text": text,
                 "mime": mime_type,
                 "size": len(file_content),
-                "timestamp": time.time()
+                "timestamp": time.time(),
+                "id":id_messagge
             }
 
             json_metadata = json.dumps(metadata, sort_keys=True)
@@ -131,13 +134,15 @@ async def s_file(chat_id: int = Form(...), text: str = Form(""), cryph: bool = F
             payload = metadata_size.to_bytes(4, byteorder='big') + metadata_bytes + file_content
             
             encrypted_payload = cifra_con_age(payload, recipient_keys)
-            
+            encrypted_id = cifra_con_age(id_messagge, recipient_keys)
+
             if encrypted_payload is None:
                 raise HTTPException(status_code=500, detail="Errore durante la cifratura con age")
             
             testo = {
                 "cif":"file",
-                "text":encrypted_metadata
+                "text":encrypted_metadata,
+                "id": encrypted_id,
             }
 
             # Salva il file cifrato con nome = token
@@ -206,6 +211,7 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
             raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
         
     else:
+        id_messagge = secrets.token_hex(16)
         chat_id_hash = hashlib.sha256(pepper.encode() + str(credentials.chat_id).encode()).hexdigest()
         chat_data = data.get('data', {}).get('chats', {}).get(chat_id_hash, {})
         chiave_corrente_chat = chat_data.get('chiave', {})
@@ -238,7 +244,8 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
         da_cifrare ={
             "cif" : "on",
             "text" : credentials.text,
-            "timestamp": time.time()
+            "timestamp": time.time(),
+            "id": id_messagge,
         }
 
         json_da_cifrare = json.dumps(da_cifrare, sort_keys= True)
@@ -246,7 +253,7 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
 
         text_cyp = cifra_con_age(json_da_cifrare, recipient_keys)
 
-            
+        encrypted_id = cifra_con_age(id_messagge, recipient_keys)
         
         if text_cyp is None:
             raise HTTPException(status_code=500, detail="Errore durante la cifratura con age")
@@ -258,7 +265,8 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
             message_bytes = credentials.text.encode("utf-8")
             message_metadata = {
                 "cif": "message",
-                "timestamp": time.time()
+                "timestamp": time.time(),
+                "id":id_messagge,
             }
             json_metadata = json.dumps(message_metadata, sort_keys=True)
             metadata_bytes = json_metadata.encode("utf-8")
@@ -275,7 +283,8 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
             file_in_ram.name = nome_file
 
             caption = {
-                "cif":"message"
+                "cif":"message",
+                "id": encrypted_id,
             }
 
             try:
@@ -294,6 +303,7 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
         finale = {
             "cif" : "on",
             "text" : text_cyp,
+            "id" : encrypted_id,
         }
         
         try:

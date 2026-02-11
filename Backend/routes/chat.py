@@ -9,7 +9,7 @@ import hashlib
 from utils import decifra_vault, cifra_vault, is_logged_in, is_valid_age_public_key, resolve_login_session
 from realtime import connect_socket, disconnect_socket, register_telethon_handlers, index_messages
 from telethon.tl.types import DocumentAttributeAnimated
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import base64
 import subprocess
@@ -112,8 +112,9 @@ async def get_chats(login_session: str = Cookie(None), offset_date: str = None):
 async def get_chat_messages(chat_id: int, limit: int, start: int, login_session: str = Cookie(None)):
     temp_id, data = resolve_login_session(login_session)
     chat_id_cif = hashlib.sha256(pepper.encode() + str(chat_id).encode()).hexdigest()
+    if "ids_" not in data:
+        data['ids_'] = set()
 
-    
     client = data['client']
     username = hashlib.sha256(pepper.encode() + data['data']['username'].encode()).hexdigest()
     if not client.is_connected():
@@ -197,7 +198,147 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
 
     await index_messages(temp_id, chat_id, [m.get("id") for m in messages if m.get("id") is not None])
 
-    messages.reverse()  
+     
+
+    # Calcola la "window" in funzione del tempo di download
+    # dei file cifrati presenti nella pagina, partendo dal
+    # messaggio più nuovo e andando indietro fino al punto in
+    # cui un messaggio "apre" maggiormente la finestra.
+    # Assumiamo una banda di 32 KiB/s. In assenza di file cifrati
+    # la finestra temporale minima è di 10 secondi.
+
+    # window sarà una coppia di date (inizio, fine)
+    window_start = None
+    window_end = None
+    # Trova il timestamp del messaggio più recente (fine finestra)
+    for m in messages:
+        dt = m.get('date')
+        if dt and (window_end is None or dt < window_end):
+            window_end = dt
+
+    for message in messages:
+        text = message.get('text') or ''
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                message['json'] = parsed
+                message['is_json'] = True
+            else:
+                message['is_json'] = False
+        except Exception:
+            message['is_json'] = False
+        
+        if message['is_json'] and window_end is not None:
+            cif_flag = message['json'].get('CIF') or message['json'].get('cif')
+            if cif_flag in ("file", "message") and message.get('file') and message.get('size') is not None:
+                try:
+                    size_bytes = float(message.get('size') or 0)
+                except (TypeError, ValueError):
+                    size_bytes = 0
+
+                if size_bytes > 0 and message.get('date'):
+                    # Tempo stimato di download del file su 32 KiB/s
+                    download_time = size_bytes / (32 * 1024)
+                    # "Finestra" che questo messaggio richiede:
+                    # si parte dal suo timestamp e si torna indietro
+                    candidate_start = message['date'] - timedelta(seconds=download_time)
+                    if window_start is None or candidate_start < window_start:
+                        window_start = candidate_start
+            if cif_flag in ("on") and (message['date']<window_start if window_start is not None else True or window_start == None ):
+                window_start = message['date']
+                
+    # Se non abbiamo trovato messaggi cifrati o date valide,
+    # impostiamo una finestra di default di 10 secondi che
+    # termina al messaggio più recente (se esiste).
+    if window_end is not None:
+        if window_start is None:
+            window_start = window_end - timedelta(seconds=10)
+        # Se la finestra è più corta di 10 secondi, estendila
+        # all'indietro in modo da avere sempre almeno 10 secondi.
+        min_delta = timedelta(seconds=10)
+        current_delta = window_end - window_start
+        if current_delta < min_delta:
+            window_start = window_end - min_delta
+
+    # A questo punto "window" è una coppia di date (inizio, fine)
+    # o None se non abbiamo potuto calcolarla.
+    window = (window_start, window_end) if window_start and window_end else None
+    # Se abbiamo una finestra temporale valida, carichiamo tramite Telethon
+    # tutti i messaggi compresi tra window_start e window_end.
+    messages_in_window = []
+    if window_start is not None and window_end is not None and window_start < window_end:
+        # Partiamo da window_end e andiamo indietro nel tempo
+        # finché non scendiamo sotto window_start.
+        async for msg in client.iter_messages(entity, offset_date=window_end):
+            # Se il messaggio non ha data, salta
+            if not msg.date:
+                continue
+            # Se (per qualche motivo) è oltre il limite superiore, salta
+            if msg.date > window_end:
+                continue
+            # Una volta superato il limite inferiore, possiamo interrompere
+            if msg.date < window_start:
+                break
+
+            sender = await msg.get_sender()
+            message_data = {
+                'id': msg.id,
+                'chat_id': chat_id,
+                'text': msg.message or '',
+                'date': msg.date if msg.date else None,
+                'sender_id': msg.sender_id,
+                'sender_username': getattr(sender, 'username', None) if sender else None,
+                'out': msg.out,
+                'reply_to': msg.reply_to.reply_to_msg_id if msg.reply_to else None,
+            }
+
+            if msg.media:
+                message_data['file'] = True
+
+                if msg.sticker:
+                    document = msg.sticker
+                    is_animated = any(
+                        isinstance(attr, DocumentAttributeAnimated)
+                        for attr in (document.attributes or [])
+                    )
+                    mime = document.mime_type or 'image/webp'
+                    if is_animated or mime in ('application/x-tgsticker', 'video/webm'):
+                        message_data['media_type'] = 'sticker_animated'
+                    else:
+                        message_data['media_type'] = 'sticker'
+                    message_data['size'] = document.size
+                    message_data['mime'] = mime
+
+                elif msg.gif:
+                    message_data['media_type'] = 'gif'
+                    message_data['size'] = msg.gif.size
+                    message_data['mime'] = msg.gif.mime_type or 'video/mp4'
+
+                elif msg.document:
+                    document = msg.document
+                    message_data['media_type'] = 'document'
+                    message_data['filename'] = None
+                    message_data['mime'] = document.mime_type or 'application/octet-stream'
+                    message_data['size'] = document.size or 0
+
+                    for attr in (document.attributes or []):
+                        if hasattr(attr, 'file_name'):
+                            message_data['filename'] = attr.file_name
+                            break
+
+                elif msg.photo:
+                    message_data['media_type'] = 'photo'
+                    message_data['size'] = msg.photo.size if hasattr(msg.photo, 'size') else 0
+
+                elif msg.video:
+                    message_data['media_type'] = 'video'
+                    message_data['size'] = msg.video.size if hasattr(msg.video, 'size') else 0
+                    message_data['mime'] = msg.video.mime_type if hasattr(msg.video, 'mime_type') else 'video/mp4'
+
+            messages_in_window.append(message_data)
+
+   # for message in messages_in_window:
+
 
     for message in messages:
         
@@ -351,6 +492,8 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
             if cif_flag == "on":
                 text = message['json'].get('text')
                 timestamp = message.get('date')
+                id_message = message['json'].get('id')
+
 
                 timestamp_unix = timestamp.timestamp() if timestamp else None
                 chats_data = data['data'].get('chats', {})
@@ -424,13 +567,40 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                     except Exception as e:
                         
                         continue
-
+                id_message_decifrato_caption = None
+                for privata in candidate_privates:
+                    try:
+                        
+                        try:
+                            text_bytes = base64.b64decode(id_message)
+                        except:
+                            text_bytes = text.encode()
+                        
+                        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
+                            keyfile.write(privata)
+                            keyfile_path = keyfile.name
+                        try:
+                            result = subprocess.run(
+                                ['age', '-d', '-i', keyfile_path],
+                                input=text_bytes,
+                                capture_output=True,
+                                check=True
+                            )
+                            id_message_decifrato_caption = result.stdout.decode()
+                            break
+                        finally:
+                            import os
+                            os.unlink(keyfile_path)
+                    except Exception as e:
+                        
+                        continue
                 if text_decifrato:
                     try:
                         dizionario = json.loads(text_decifrato)
                         
                         if dizionario['cif'] == "on":
                             tempo_decifrato = dizionario.get('timestamp')
+                            id_message_decifrato = dizionario.get('id')
                             timestamp = message.get('date')
                             diff_seconds = None
                             if timestamp and tempo_decifrato is not None:
@@ -439,20 +609,29 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                                 except (TypeError, ValueError):
                                     diff_seconds = None
 
-                            if diff_seconds is not None and diff_seconds > 30:
+                            if (diff_seconds is not None and diff_seconds > 10) or (id_message_decifrato_caption in data['ids_']):
                                 message['error'] = "questo messaggio e' frutto di un replay attack"
                                 if 'json' in message:
                                     del message['json']
                                 message['is_json'] = False
                                 continue
-
+                           
+                            elif  id_message_decifrato_caption != id_message_decifrato :
+                                message['error'] = "questo messaggio e' stato modificato"
+                                if 'json' in message:
+                                    del message['json']
+                                message['is_json'] = False
+                                continue
                             message['text'] = dizionario['text']
+                                
+                            data['ids_'].add(id_message_decifrato_caption)
+
                             
                             if 'json' in message:
                                 del message['json']
                             message['is_json'] = False
                         else:
-                            message['error'] = "attenzione messaggio modificato"
+                            message['error'] = "questo messaggio e' stato modificato"
                             if 'json' in message:
                                 del message['json']
                             message['is_json'] = False
@@ -464,6 +643,7 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                 text = message['json'].get('text')
    
                 timestamp = message.get('date')
+                id_message = message['json'].get('id')
 
                 timestamp_unix = timestamp.timestamp() if timestamp else None
                 chats_data = data['data'].get('chats', {})
@@ -537,13 +717,42 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                     except Exception as e:
                         
                         continue
-
+                
+                id_message_decifrato_caption = None
+                for privata in candidate_privates:
+                    try:
+                        
+                        try:
+                            text_bytes = base64.b64decode(id_message)
+                        except:
+                            text_bytes = text.encode()
+                        
+                        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
+                            keyfile.write(privata)
+                            keyfile_path = keyfile.name
+                        try:
+                            result = subprocess.run(
+                                ['age', '-d', '-i', keyfile_path],
+                                input=text_bytes,
+                                capture_output=True,
+                                check=True
+                            )
+                            id_message_decifrato_caption = result.stdout.decode()
+                            break
+                        finally:
+                            import os
+                            os.unlink(keyfile_path)
+                    except Exception as e:
+                        
+                        continue
+                
                 if text_decifrato:
                     try:
                         dizionario = json.loads(text_decifrato)
                         if dizionario['cif'] == "file":
                             tempo_decifrato = dizionario.get('timestamp')
                             timestamp = message.get('date')
+                            id_message_decifrato = dizionario.get('id')
                             diff_seconds = None
                             if timestamp and tempo_decifrato is not None:
                                 try:
@@ -560,8 +769,14 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                                 except (TypeError, ValueError):
                                     allowed_seconds = 30
 
-                            if diff_seconds is not None and diff_seconds > allowed_seconds:
+                            if (diff_seconds is not None and diff_seconds > allowed_seconds) or (id_message_decifrato_caption in data['ids_']):
                                 message['error'] = "questo messaggio e' frutto di un replay attack"
+                                if 'json' in message:
+                                    del message['json']
+                                message['is_json'] = False
+                                continue
+                            elif  id_message_decifrato_caption != id_message_decifrato:
+                                message['error'] = "questo messaggio e' stato modificato"
                                 if 'json' in message:
                                     del message['json']
                                 message['is_json'] = False
@@ -571,12 +786,13 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                             message['text'] = dizionario['text']
                             message['mime'] = dizionario['mime']
                             message['size'] = dizionario['size']
+                            data['ids_'].add(id_message_decifrato_caption)
 
                             if 'json' in message:
                                 del message['json']
                             message['is_json'] = False
                         else:
-                            message['error'] = "on"
+                            message['error'] = "questo messaggio e' stato modificato"
                             if 'json' in message:
                                 del message['json']
                             message['is_json'] = False
@@ -586,6 +802,7 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
             
             if cif_flag == "message":
                 try:
+                    id_message = message['json'].get('id')
                     message_id = message.get('id')
                     if not message_id:
                         continue
@@ -667,6 +884,34 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                                 os.unlink(keyfile_path)
                         except Exception:
                             continue
+                    
+                    id_message_decifrato_caption = None
+                    for privata in candidate_privates:
+                        try:
+                            
+                            try:
+                                text_bytes = base64.b64decode(id_message)
+                            except:
+                                text_bytes = text.encode()
+                            
+                            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
+                                keyfile.write(privata)
+                                keyfile_path = keyfile.name
+                            try:
+                                result = subprocess.run(
+                                    ['age', '-d', '-i', keyfile_path],
+                                    input=text_bytes,
+                                    capture_output=True,
+                                    check=True
+                                )
+                                id_message_decifrato_caption = result.stdout.decode()
+                                break
+                            finally:
+                                import os
+                                os.unlink(keyfile_path)
+                        except Exception as e:
+                            
+                            continue
 
                     if decrypted_payload and len(decrypted_payload) >= 4:
                         metadata_size = int.from_bytes(decrypted_payload[:4], byteorder='big')
@@ -682,6 +927,7 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                             if inner_metadata and inner_metadata.get('cif') == 'message':
 
                                 tempo_decifrato = inner_metadata.get('timestamp')
+                                id_message_decifrato = inner_metadata.get('id')
                                 timestamp = message.get('date')
                                 diff_seconds = None
                                 if timestamp and tempo_decifrato is not None:
@@ -690,14 +936,23 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                                     except (TypeError, ValueError):
                                         diff_seconds = None
 
-                                if diff_seconds is not None and diff_seconds > 30:
+                                if (diff_seconds is not None and diff_seconds > 10) or (id_message_decifrato_caption in data['ids_']):
                                     message['error'] = "questo messaggio e' frutto di un replay attack"
+                                    if 'json' in message:
+                                        del message['json']
+                                    message['is_json'] = False
+                                    continue
+                                
+                                elif  id_message_decifrato_caption != id_message_decifrato:
+                                    message['error'] = "questo messaggio e' stato modificato"
                                     if 'json' in message:
                                         del message['json']
                                     message['is_json'] = False
                                     continue
 
                                 message['text'] = message_bytes.decode('utf-8', errors='replace')
+                                data['ids_'].add(id_message_decifrato_caption)
+
                                 if 'json' in message:
                                     del message['json']
                                 message['is_json'] = False
@@ -705,6 +960,7 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                 except Exception:
                     import traceback
                     traceback.print_exc()
+    messages.reverse() 
     return {"chat_id": chat_id, "messages": messages}
 
 @router.get("/chats/{chat_id}/inits")

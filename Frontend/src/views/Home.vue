@@ -77,7 +77,7 @@
               if (!payload || !this.selectedChat) return
               if (payload.chat_id !== this.selectedChat.id) return
               if (payload.event_type === 'new' && this.isEncryptedPayload(payload.message)) {
-                this.queueRealtimeReload()
+                this.queueRealtimeReload({ start: 0, limit: 1 })
                 return
               }
               if (payload.event_type === 'edited') {
@@ -124,12 +124,12 @@
               this.messaggi.splice(index, 1, { ...current, ...message })
               return true
             },
-            queueRealtimeReload() {
+            queueRealtimeReload(options = null) {
               if (this.realtimeReloadTimer) {
                 clearTimeout(this.realtimeReloadTimer)
                 this.realtimeReloadTimer = null
               }
-              this.reload_chat(true)
+              this.reload_chat(true, options)
             },
             setAnimatedStickerRef(messageId, el) {
               if (el) {
@@ -249,6 +249,18 @@
                   this.loading = false
               }
               return null
+            },
+            async fetchLatestMessages(limit = 1) {
+              if (!this.selectedChat) return
+              try {
+                const response = await api.get(
+                  `/chats/${this.selectedChat.id}/limit/${limit}/start/0`,
+                  { withCredentials: true }
+                )
+                this.mergeLatestMessages(response.data.messages)
+              } catch (e) {
+                this.errormsg = e.response?.data?.message || e.message
+              }
             },
             async reloadEditedMessage(payload) {
               const messageId = payload?.message?.id
@@ -380,7 +392,7 @@
                   this.$refs.fileInput.value = '';
                   this.loading = false
                   this.text = ''
-                  await this.reload_chat(true)
+                  await this.fetchLatestMessages(1)
                   this.scrollToBottom()
               }
             },
@@ -405,7 +417,7 @@
                       group: this.selectedChat.is_group
                     }, { withCredentials: true })
                     this.text = ''
-                    await this.reload_chat()
+                    await this.fetchLatestMessages(1)
                     this.scrollToBottom()
                 } catch (e) {
                     this.errormsg = e.response?.data?.message || e.message
@@ -434,7 +446,7 @@
                     this.$refs.fileInput.value = '';
                     this.loading = false
                     this.text = ''
-                    await this.reload_chat()
+                    await this.fetchLatestMessages(1)
                     this.scrollToBottom()
                   }
                 }
@@ -458,7 +470,7 @@
                     this.$refs.fileInput.value = '';
                     this.loading = false
                     this.text = ''
-                    await this.reload_chat()
+                    await this.fetchLatestMessages(1)
                     this.scrollToBottom()
                   }
                 }
