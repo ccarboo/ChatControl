@@ -488,7 +488,7 @@
                   await api.post('/messages/initializing', {
                     chat_id: this.selectedChat.id
                   }, { withCredentials: true })
-                  await this.reload_chat()
+                  await this.fetchLatestMessages(1)
               } catch (e) {
                   this.errormsg = e.response?.data?.message || e.message
               } finally {

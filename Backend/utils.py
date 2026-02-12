@@ -137,6 +137,145 @@ def is_valid_age_public_key(key: str):
         return True
     return False
 
+
+def store_public_key_in_vault(
+    user_data,
+    chat_id: int,
+    sender_id,
+    public_key: str,
+    msg_date=None,
+    is_group: bool | None = None,
+    group_title: str | None = None,
+    sender_username: str | None = None,
+):
+    if not user_data or not public_key:
+        return False
+
+    if is_group is None:
+        try:
+            is_group = int(chat_id) < 0
+        except Exception:
+            is_group = False
+
+    username = hashlib.sha256(pepper.encode() + user_data['data']['username'].encode()).hexdigest()
+    chat_id_cif = hashlib.sha256(pepper.encode() + str(chat_id).encode()).hexdigest()
+
+    vault_deciphered = None
+    insert_new_vault = False
+
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            if is_group:
+                cursor.execute(
+                    """SELECT vault FROM contatti_gruppo WHERE proprietario = ? AND gruppo_id = ?""",
+                    (username, chat_id_cif)
+                )
+                risultato = cursor.fetchone()
+                if not risultato or not risultato[0]:
+                    vault_deciphered = {
+                        'gruppo_id': chat_id,
+                        'gruppo_nome': group_title or 'Gruppo',
+                        'partecipanti': {}
+                    }
+                    insert_new_vault = True
+                else:
+                    vault_deciphered = decifra_vault(risultato[0], user_data['data']['masterkey'])
+            else:
+                cursor.execute(
+                    """SELECT vault FROM contatti WHERE proprietario = ? AND contatto_id = ?""",
+                    (username, chat_id_cif)
+                )
+                risultato = cursor.fetchone()
+                if not risultato or not risultato[0]:
+                    vault_deciphered = {
+                        'user_id': chat_id,
+                        'username': sender_username or str(chat_id),
+                        'chiavi': []
+                    }
+                    insert_new_vault = True
+                else:
+                    vault_deciphered = decifra_vault(risultato[0], user_data['data']['masterkey'])
+    except sqlite3.Error:
+        return False
+
+    existing_keys = set()
+    if is_group:
+        partecipanti = vault_deciphered.get('partecipanti', {})
+        for participant_data in partecipanti.values():
+            current_key = participant_data.get('chiave', {})
+            if current_key and current_key.get('chiave'):
+                existing_keys.add(current_key.get('chiave'))
+            for chiave_info in participant_data.get('chiavi', []) or []:
+                if chiave_info.get('chiave'):
+                    existing_keys.add(chiave_info.get('chiave'))
+    else:
+        for chiave_info in vault_deciphered.get('chiavi', []) or []:
+            if chiave_info.get('chiave'):
+                existing_keys.add(chiave_info.get('chiave'))
+
+    if public_key in existing_keys:
+        return False
+
+    new_key_timestamp = msg_date.timestamp() if msg_date else time.time()
+    new_key = {
+        'chiave': public_key,
+        'inizio': new_key_timestamp,
+        'fine': None
+    }
+
+    if is_group:
+        sender_id_str = str(sender_id) if sender_id is not None else ''
+        partecipanti = vault_deciphered.setdefault('partecipanti', {})
+        if sender_id_str not in partecipanti:
+            partecipanti[sender_id_str] = {'chiave': {}, 'chiavi': []}
+
+        current_key = partecipanti[sender_id_str].get('chiave', {})
+        if current_key and current_key.get('chiave'):
+            current_key['fine'] = new_key_timestamp - 1
+            partecipanti[sender_id_str].setdefault('chiavi', []).append(current_key)
+
+        partecipanti[sender_id_str]['chiave'] = new_key
+    else:
+        chiavi_list = vault_deciphered.get('chiavi', [])
+        for chiave_info in chiavi_list:
+            if chiave_info.get('fine') is None:
+                chiave_info['fine'] = new_key_timestamp - 1
+        chiavi_list.append(new_key)
+        vault_deciphered['chiavi'] = chiavi_list
+
+    vault_cifrato = cifra_vault(vault_deciphered, user_data['data']['masterkey'])
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            if is_group:
+                if insert_new_vault:
+                    cursor.execute(
+                        """INSERT INTO contatti_gruppo (proprietario, gruppo_id, vault) VALUES (?, ?, ?)""",
+                        (username, chat_id_cif, vault_cifrato)
+                    )
+                else:
+                    cursor.execute(
+                        """UPDATE contatti_gruppo SET vault = ? WHERE proprietario = ? AND gruppo_id = ?""",
+                        (vault_cifrato, username, chat_id_cif)
+                    )
+            else:
+                if insert_new_vault:
+                    cursor.execute(
+                        """INSERT INTO contatti (proprietario, contatto_id, vault) VALUES (?, ?, ?)""",
+                        (username, chat_id_cif, vault_cifrato)
+                    )
+                else:
+                    cursor.execute(
+                        """UPDATE contatti SET vault = ? WHERE proprietario = ? AND contatto_id = ?""",
+                        (vault_cifrato, username, chat_id_cif)
+                    )
+            conn.commit()
+    except sqlite3.Error:
+        return False
+
+    return True
+
 def get_group_chyper_keys(data, chat_id1):
     username = hashlib.sha256(pepper.encode() + data['data']['username'].encode()).hexdigest()
     chat_id = hashlib.sha256(pepper.encode() + str(chat_id1).encode()).hexdigest()

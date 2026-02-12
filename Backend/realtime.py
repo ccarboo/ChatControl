@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import sqlite3
+import json
 from fastapi import WebSocket
 from telethon import events, utils
 from telethon.tl.types import (
@@ -11,7 +12,7 @@ from telethon.tl.types import (
 )
 from config import pepper
 from database.sqlite import get_connection
-from utils import cifra_vault, decifra_vault, get_user_data_by_temp_id
+from utils import cifra_vault, decifra_vault, get_user_data_by_temp_id, is_valid_age_public_key, store_public_key_in_vault
 
 # temp_id -> chat_id -> set[WebSocket]
 _active_connections = {}
@@ -237,6 +238,29 @@ def register_telethon_handlers(client, temp_id: str):
             return
         if event.message and event.message.id:
             await index_messages(temp_id, event.chat_id, [event.message.id])
+        if event.message and not getattr(event.message, "out", False):
+            text = event.message.message or ""
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                parsed = None
+
+            if isinstance(parsed, dict):
+                cif_flag = parsed.get("CIF") or parsed.get("cif")
+                if cif_flag == "in":
+                    pubblic = parsed.get("public")
+                    if pubblic and is_valid_age_public_key(pubblic):
+                        user_data = get_user_data_by_temp_id(temp_id)
+                        if user_data:
+                            store_public_key_in_vault(
+                                user_data,
+                                event.chat_id,
+                                event.message.sender_id,
+                                pubblic,
+                                msg_date=getattr(event.message, "date", None),
+                                is_group=_is_group_chat_id(event.chat_id),
+                                group_title=getattr(event.chat, "title", "Gruppo")
+                            )
         payload = {
             "event_type": "new",
             "chat_id": event.chat_id,

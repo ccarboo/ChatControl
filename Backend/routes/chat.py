@@ -6,7 +6,7 @@ from database.sqlite import get_connection
 from config import pepper
 import time
 import hashlib
-from utils import decifra_vault, cifra_vault, is_logged_in, is_valid_age_public_key, resolve_login_session
+from utils import decifra_vault, cifra_vault, is_logged_in, is_valid_age_public_key, resolve_login_session, store_public_key_in_vault
 from realtime import connect_socket, disconnect_socket, register_telethon_handlers, index_messages
 from telethon.tl.types import DocumentAttributeAnimated
 from datetime import datetime, timedelta
@@ -465,132 +465,15 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                 pubblic = message['json'].get('public')
                 if pubblic is None or not is_valid_age_public_key(pubblic):
                     continue
-                vault_deciphered = None
-                all_keys = []
-                insert_new_vault = False
-                is_group = is_group_chat_id(chat_id)
-                try:
-                    if is_group:
-                        with get_connection() as conn:
-                            cursor = conn.cursor()
-                            cursor.execute(
-                                """SELECT vault FROM contatti_gruppo WHERE proprietario = ? AND gruppo_id = ?""",
-                                (username, chat_id_cif)
-                            )
-                            risultato = cursor.fetchone()
-                            if not risultato or not risultato[0]:
-                                vault_deciphered = {
-                                    'gruppo_id': chat_id,
-                                    'gruppo_nome': getattr(entity, 'title', 'Gruppo'),
-                                    'partecipanti': {}
-                                }
-                                insert_new_vault = True
-                            else:
-                                vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
-
-                            if 'partecipanti' in vault_deciphered:
-                                for participant_id, participant_data in vault_deciphered['partecipanti'].items():
-                                    # Aggiungi chiave corrente
-                                    current_key = participant_data.get('chiave', {})
-                                    if current_key and current_key.get('chiave'):
-                                        all_keys.append(current_key)
-                                    # Aggiungi chiavi storiche
-                                    if 'chiavi' in participant_data:
-                                        for chiave_info in participant_data['chiavi']:
-                                            all_keys.append(chiave_info)
-
-                            for key in all_keys[:]:
-                                if key.get('fine') is not None:
-                                    all_keys.remove(key)
-                    else:
-                        with get_connection() as conn:
-                            cursor = conn.cursor()
-                            cursor.execute(
-                                """SELECT vault FROM contatti WHERE proprietario = ? AND contatto_id = ?""",
-                                (username, chat_id_cif)
-                            )
-                            risultato = cursor.fetchone()
-                            if not risultato or not risultato[0]:
-                                sender = await msg.get_sender()
-                                vault_deciphered = {
-                                    'user_id': chat_id,
-                                    'username': getattr(sender, 'username', str(chat_id)) if sender else str(chat_id),
-                                    'chiavi': []
-                                }
-                                insert_new_vault = True
-                            else:
-                                vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
-
-                            if 'chiavi' in vault_deciphered:
-                                for chiave_info in vault_deciphered['chiavi']:
-                                    all_keys.append(chiave_info)
-
-                            for key in all_keys[:]:
-                                if key.get('fine') is not None:
-                                    all_keys.remove(key)
-                except sqlite3.Error as error:
-                    raise HTTPException(status_code=500, detail=str(error))
-
-                if pubblic not in [k['chiave'] for k in all_keys]:
-                    msg_date = message.get('date')
-                    new_key_timestamp = msg_date.timestamp() if msg_date else time.time()
-                    new_key = {
-                        'chiave': pubblic,
-                        'inizio': new_key_timestamp,
-                        'fine': None
-                    }
-
-                    if is_group:
-                        sender_id = str(message.get('sender_id'))
-                        if sender_id not in vault_deciphered['partecipanti']:
-                            vault_deciphered['partecipanti'][sender_id] = {'chiave': {}, 'chiavi': []}
-                        
-                        # Sposta la chiave corrente nello storico
-                        current_key = vault_deciphered['partecipanti'][sender_id].get('chiave', {})
-                        if current_key and current_key.get('chiave'):
-                            current_key['fine'] = new_key_timestamp - 1
-                            if 'chiavi' not in vault_deciphered['partecipanti'][sender_id]:
-                                vault_deciphered['partecipanti'][sender_id]['chiavi'] = []
-                            vault_deciphered['partecipanti'][sender_id]['chiavi'].append(current_key)
-                        
-                        # Imposta la nuova chiave come corrente
-                        vault_deciphered['partecipanti'][sender_id]['chiave'] = new_key
-                    else:
-                        chiavi_list = vault_deciphered.get('chiavi', [])
-                        for chiave_info in chiavi_list:
-                            if chiave_info.get('fine') is None:
-                                chiave_info['fine'] = new_key_timestamp - 1
-                        chiavi_list.append(new_key)
-
-                    vault_cifrato = cifra_vault(vault_deciphered, data['data']['masterkey'])
-                    try:
-                        with get_connection() as conn:
-                            cursor = conn.cursor()
-                            if is_group:
-                                if insert_new_vault:
-                                    cursor.execute(
-                                        """INSERT INTO contatti_gruppo (proprietario, gruppo_id, vault) VALUES (?, ?, ?)""",
-                                        (username, chat_id_cif, vault_cifrato)
-                                    )
-                                else:
-                                    cursor.execute(
-                                        """UPDATE contatti_gruppo SET vault = ? WHERE proprietario = ? AND gruppo_id = ?""",
-                                        (vault_cifrato, username, chat_id_cif)
-                                    )
-                            else:
-                                if insert_new_vault:
-                                    cursor.execute(
-                                        """INSERT INTO contatti (proprietario, contatto_id, vault) VALUES (?, ?, ?)""",
-                                        (username, chat_id_cif, vault_cifrato)
-                                    )
-                                else:
-                                    cursor.execute(
-                                        """UPDATE contatti SET vault = ? WHERE proprietario = ? AND contatto_id = ?""",
-                                        (vault_cifrato, username, chat_id_cif)
-                                    )
-                            conn.commit()
-                    except sqlite3.Error as error:
-                        raise HTTPException(status_code=500, detail=str(error))
+                store_public_key_in_vault(
+                    data,
+                    chat_id,
+                    message.get('sender_id'),
+                    pubblic,
+                    msg_date=message.get('date'),
+                    is_group=is_group_chat_id(chat_id),
+                    group_title=getattr(entity, 'title', 'Gruppo')
+                )
                     
             if cif_flag == "on":
                 text = message['json'].get('text')
