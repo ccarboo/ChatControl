@@ -125,24 +125,34 @@ async def s_file(chat_id: int = Form(...), text: str = Form(""), cryph: bool = F
             }
 
             json_metadata = json.dumps(metadata, sort_keys=True)
-            encrypted_metadata = cifra_con_age(json_metadata, recipient_keys)
-
-            
             metadata_bytes = json_metadata.encode('utf-8')
             metadata_size = len(metadata_bytes)
-            
-            payload = metadata_size.to_bytes(4, byteorder='big') + metadata_bytes + file_content
-            
-            encrypted_payload = cifra_con_age(payload, recipient_keys)
-            encrypted_id = cifra_con_age(id_messagge, recipient_keys)
 
-            if encrypted_payload is None:
+            encrypted_metadata = cifra_con_age(metadata_bytes, recipient_keys)
+            if encrypted_metadata is None:
                 raise HTTPException(status_code=500, detail="Errore durante la cifratura con age")
+
+            body_plain = metadata_size.to_bytes(4, byteorder='big') + metadata_bytes + file_content
+            encrypted_body = cifra_con_age(body_plain, recipient_keys)
+            if encrypted_body is None:
+                raise HTTPException(status_code=500, detail="Errore durante la cifratura con age")
+
+            if isinstance(encrypted_metadata, str):
+                encrypted_metadata = encrypted_metadata.encode('utf-8')
+            if isinstance(encrypted_body, str):
+                encrypted_body = encrypted_body.encode('utf-8')
+
+            payload = (
+                metadata_size.to_bytes(4, byteorder='big')
+                + len(encrypted_metadata).to_bytes(4, byteorder='big')
+                + encrypted_metadata
+                + encrypted_body
+            )
+
+            encrypted_payload = payload
             
             testo = {
                 "cif":"file",
-                "text":encrypted_metadata,
-                "id": encrypted_id,
             }
 
             # Salva il file cifrato con nome = token
@@ -259,7 +269,7 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
             raise HTTPException(status_code=500, detail="Errore durante la cifratura con age")
         
         
-        if len(text_cyp) > MESSAGE_LIMIT:
+        if len(text_cyp) + len(encrypted_id) + 11 > MESSAGE_LIMIT:
             token = secrets.token_hex(8)
             nome_file = token + ".dat"
             message_bytes = credentials.text.encode("utf-8")
@@ -284,7 +294,6 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
 
             caption = {
                 "cif":"message",
-                "id": encrypted_id,
             }
 
             try:

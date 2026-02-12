@@ -626,10 +626,37 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                         traceback.print_exc()
 
             if cif_flag == "file":
-                text = message['json'].get('text')
-   
+
+                message_id = message.get('id')
+                if message_id:
+                    full_message = await client.get_messages(entity, ids=message_id)
+                    if full_message and full_message.media:
+                        import io
+                        file_bytes = io.BytesIO()
+                        max_bytes = 64 * 1024
+                        downloaded = 0
+                        async for chunk in client.iter_download(full_message, offset=0, limit=max_bytes):
+                            if not chunk:
+                                break
+                            file_bytes.write(chunk)
+                            downloaded += len(chunk)
+                            if downloaded >= max_bytes:
+                                break
+                        file_bytes.seek(0)
+                        file_head_bytes = file_bytes.getvalue()
+                        message['file_head'] = base64.b64encode(file_head_bytes).decode()
+                        message['file_head_size'] = len(file_head_bytes)
+
+                        header_metadata_size = None
+                        header_encrypted_metadata = None
+                        if len(file_head_bytes) >= 8:
+                            header_metadata_size = int.from_bytes(file_head_bytes[:4], byteorder='big')
+                            header_encrypted_size = int.from_bytes(file_head_bytes[4:8], byteorder='big')
+                            if 0 < header_encrypted_size <= len(file_head_bytes) - 8:
+                                header_encrypted_metadata = file_head_bytes[8:8 + header_encrypted_size]
+    
+
                 timestamp = message.get('date')
-                id_message = message['json'].get('id')
 
                 timestamp_unix = timestamp.timestamp() if timestamp else None
                 chats_data = data['data'].get('chats', {})
@@ -675,63 +702,31 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                         candidate_privates.append(chiavi_storiche_sorted[0].get('privata'))
 
                 text_decifrato = None
-                
+                if header_encrypted_metadata:
+                    for privata in candidate_privates:
+                        try:
+                            try:
+                                input_bytes = base64.b64decode(header_encrypted_metadata)
+                            except Exception:
+                                input_bytes = header_encrypted_metadata
+                            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
+                                keyfile.write(privata)
+                                keyfile_path = keyfile.name
+                            try:
+                                result = subprocess.run(
+                                    ['age', '-d', '-i', keyfile_path],
+                                    input=input_bytes,
+                                    capture_output=True,
+                                    check=True
+                                )
+                                text_decifrato = result.stdout.decode()
+                                break
+                            finally:
+                                import os
+                                os.unlink(keyfile_path)
+                        except Exception:
+                            continue
 
-                for privata in candidate_privates:
-                    try:
-                        
-                        try:
-                            text_bytes = base64.b64decode(text)
-                        except:
-                            text_bytes = text.encode()
-                        
-                        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
-                            keyfile.write(privata)
-                            keyfile_path = keyfile.name
-                        try:
-                            result = subprocess.run(
-                                ['age', '-d', '-i', keyfile_path],
-                                input=text_bytes,
-                                capture_output=True,
-                                check=True
-                            )
-                            text_decifrato = result.stdout.decode()
-                            break
-                        finally:
-                            import os
-                            os.unlink(keyfile_path)
-                    except Exception as e:
-                        
-                        continue
-                
-                id_message_decifrato_caption = None
-                for privata in candidate_privates:
-                    try:
-                        
-                        try:
-                            text_bytes = base64.b64decode(id_message)
-                        except:
-                            text_bytes = text.encode()
-                        
-                        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
-                            keyfile.write(privata)
-                            keyfile_path = keyfile.name
-                        try:
-                            result = subprocess.run(
-                                ['age', '-d', '-i', keyfile_path],
-                                input=text_bytes,
-                                capture_output=True,
-                                check=True
-                            )
-                            id_message_decifrato_caption = result.stdout.decode()
-                            break
-                        finally:
-                            import os
-                            os.unlink(keyfile_path)
-                    except Exception as e:
-                        
-                        continue
-                
                 if text_decifrato:
                     try:
                         dizionario = json.loads(text_decifrato)
@@ -755,24 +750,19 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                                 except (TypeError, ValueError):
                                     allowed_seconds = 30
 
-                            if (diff_seconds is not None and diff_seconds > allowed_seconds) or (id_message_decifrato_caption in data['ids_']):
+                            if (diff_seconds is not None and diff_seconds > allowed_seconds) or (id_message_decifrato in data['ids_']):
                                 message['error'] = "questo messaggio e' frutto di un replay attack"
                                 if 'json' in message:
                                     del message['json']
                                 message['is_json'] = False
                                 continue
-                            elif  id_message_decifrato_caption != id_message_decifrato:
-                                message['error'] = "questo messaggio e' stato modificato"
-                                if 'json' in message:
-                                    del message['json']
-                                message['is_json'] = False
-                                continue
+                            
                             message['file'] = True
                             message['filename'] = dizionario['filename']
                             message['text'] = dizionario['text']
                             message['mime'] = dizionario['mime']
                             message['size'] = dizionario['size']
-                            data['ids_'].add(id_message_decifrato_caption)
+                            data['ids_'].add(id_message_decifrato)
 
                             if 'json' in message:
                                 del message['json']
@@ -788,7 +778,6 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
             
             if cif_flag == "message":
                 try:
-                    id_message = message['json'].get('id')
                     message_id = message.get('id')
                     if not message_id:
                         continue
@@ -871,33 +860,6 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                         except Exception:
                             continue
                     
-                    id_message_decifrato_caption = None
-                    for privata in candidate_privates:
-                        try:
-                            
-                            try:
-                                text_bytes = base64.b64decode(id_message)
-                            except:
-                                text_bytes = text.encode()
-                            
-                            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
-                                keyfile.write(privata)
-                                keyfile_path = keyfile.name
-                            try:
-                                result = subprocess.run(
-                                    ['age', '-d', '-i', keyfile_path],
-                                    input=text_bytes,
-                                    capture_output=True,
-                                    check=True
-                                )
-                                id_message_decifrato_caption = result.stdout.decode()
-                                break
-                            finally:
-                                import os
-                                os.unlink(keyfile_path)
-                        except Exception as e:
-                            
-                            continue
 
                     if decrypted_payload and len(decrypted_payload) >= 4:
                         metadata_size = int.from_bytes(decrypted_payload[:4], byteorder='big')
@@ -922,27 +884,24 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                                     except (TypeError, ValueError):
                                         diff_seconds = None
 
-                                if (diff_seconds is not None and diff_seconds > 10) or (id_message_decifrato_caption in data['ids_']):
+                                if (diff_seconds is not None and diff_seconds > 10) or (id_message_decifrato in data['ids_']):
                                     message['error'] = "questo messaggio e' frutto di un replay attack"
-                                    if 'json' in message:
-                                        del message['json']
-                                    message['is_json'] = False
-                                    continue
-                                
-                                elif  id_message_decifrato_caption != id_message_decifrato:
-                                    message['error'] = "questo messaggio e' stato modificato"
                                     if 'json' in message:
                                         del message['json']
                                     message['is_json'] = False
                                     continue
 
                                 message['text'] = message_bytes.decode('utf-8', errors='replace')
-                                data['ids_'].add(id_message_decifrato_caption)
+                                data['ids_'].add(id_message_decifrato)
 
                                 if 'json' in message:
                                     del message['json']
                                 message['is_json'] = False
                                 message['file'] = False
+                                message.pop('media_type', None)
+                                message.pop('filename', None)
+                                message.pop('mime', None)
+                                message.pop('size', None)
                 except Exception:
                     import traceback
                     traceback.print_exc()
@@ -1318,21 +1277,34 @@ async def download_encrypt_media(chat_id: int, message_id: int, login_session: s
         if cif_flag != "file":
             raise HTTPException(status_code=400, detail="Caption non cifrata")
 
-        encrypted_metadata = caption_json.get('text')
-        if not encrypted_metadata:
-            raise HTTPException(status_code=400, detail="Caption mancante")
-
         chat_id_cif = hashlib.sha256(pepper.encode() + str(chat_id).encode()).hexdigest()
         candidate_privates = build_candidate_privates(chat_id_cif, message.date)
         if not candidate_privates:
             raise HTTPException(status_code=400, detail="Nessuna chiave disponibile")
 
-        decrypted_metadata_bytes = decrypt_with_age(encrypted_metadata, candidate_privates)
+        file_bytes = io.BytesIO()
+        await client.download_media(message, file=file_bytes)
+        file_bytes.seek(0)
+
+        encrypted_payload_bytes = file_bytes.getvalue()
+        if len(encrypted_payload_bytes) < 8:
+            raise HTTPException(status_code=400, detail="Payload non valido")
+
+        header_metadata_size = int.from_bytes(encrypted_payload_bytes[:4], byteorder='big')
+        header_encrypted_size = int.from_bytes(encrypted_payload_bytes[4:8], byteorder='big')
+        if header_encrypted_size <= 0 or header_encrypted_size > len(encrypted_payload_bytes) - 8:
+            raise HTTPException(status_code=400, detail="Header metadata non valido")
+
+        header_encrypted_metadata = encrypted_payload_bytes[8:8 + header_encrypted_size]
+        decrypted_metadata_bytes = decrypt_with_age(header_encrypted_metadata, candidate_privates)
         if not decrypted_metadata_bytes:
-            raise HTTPException(status_code=400, detail="Impossibile decifrare la caption")
+            raise HTTPException(status_code=400, detail="Impossibile decifrare i metadata")
+
+        if header_metadata_size != len(decrypted_metadata_bytes):
+            raise HTTPException(status_code=400, detail="Dimensione metadata non valida")
 
         try:
-            outer_metadata_str = decrypted_metadata_bytes.decode()
+            outer_metadata_str = decrypted_metadata_bytes.decode('utf-8')
             outer_metadata = json.loads(outer_metadata_str)
         except Exception:
             raise HTTPException(status_code=400, detail="Metadata esterni non validi")
@@ -1340,12 +1312,8 @@ async def download_encrypt_media(chat_id: int, message_id: int, login_session: s
         if outer_metadata.get('cif') != 'file':
             raise HTTPException(status_code=400, detail="Metadata esterni non cifrati")
 
-        file_bytes = io.BytesIO()
-        await client.download_media(message, file=file_bytes)
-        file_bytes.seek(0)
-
-        encrypted_payload_bytes = file_bytes.getvalue()
-        decrypted_payload = decrypt_with_age(encrypted_payload_bytes, candidate_privates)
+        encrypted_body = encrypted_payload_bytes[8 + header_encrypted_size:]
+        decrypted_payload = decrypt_with_age(encrypted_body, candidate_privates)
         if not decrypted_payload:
             raise HTTPException(status_code=400, detail="Impossibile decifrare il file")
 
