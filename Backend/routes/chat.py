@@ -38,6 +38,8 @@ async def chat_events(websocket: WebSocket, chat_id: int):
     except WebSocketDisconnect:
         pass
     finally:
+        data['ids_'] = set()
+        data['active_chat_id'] = None
         await disconnect_socket(temp_id, chat_id, websocket)
 
 
@@ -111,6 +113,9 @@ async def get_chats(login_session: str = Cookie(None), offset_date: str = None):
 @router.get("/chats/{chat_id}/limit/{limit}/start/{start}")
 async def get_chat_messages(chat_id: int, limit: int, start: int, login_session: str = Cookie(None)):
     temp_id, data = resolve_login_session(login_session)
+    if data.get('active_chat_id') != chat_id:
+        data['ids_'] = set()
+        data['active_chat_id'] = chat_id
     chat_id_cif = hashlib.sha256(pepper.encode() + str(chat_id).encode()).hexdigest()
     if "ids_" not in data:
         data['ids_'] = set()

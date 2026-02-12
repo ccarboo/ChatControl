@@ -199,6 +199,9 @@
               }
             },
             async selectChat(chat) {
+              if (this.selectedChat && this.selectedChat.id === chat.id) {
+                return
+              }
               this.closeMessageMenu()
               this.selectedChat = chat
               this.loading = true
