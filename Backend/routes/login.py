@@ -7,7 +7,7 @@ import secrets
 from config import pepper
 import time
 import hashlib
-from utils import deriva_master_key, decifra_vault, cipher, login_cache, cifra_vault
+from utils import deriva_master_key, decifra_vault, cipher, login_cache, cifra_vault, resolve_login_session
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.errors import SessionPasswordNeededError
@@ -151,3 +151,31 @@ async def login_user_expired(credentials: code, login_session: str = Cookie(None
         raise HTTPException(status_code=500, detail=str(error))
     
     return {"status":"logged in"}
+
+@router.get("/login/check")
+async def login_check(login_session: str = Cookie(None)):
+    resolve_login_session(login_session)
+    return {"status": "ok"}
+
+@router.post("/logout")
+async def logout(response: Response, login_session: str = Cookie(None)):
+    if login_session:
+        try:
+            temp_id = cipher.decrypt(login_session.encode()).decode()
+            temp_data = login_cache.pop(temp_id, None)
+            client = temp_data.get("client") if temp_data else None
+            if client:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    response.delete_cookie(
+        key="login_session",
+        httponly=True,
+        secure=True,
+        samesite="none",
+    )
+    return {"status": "logged out"}

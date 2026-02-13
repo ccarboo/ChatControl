@@ -198,6 +198,15 @@
                   this.loading = false
               }
             },
+            async logoutUser() {
+              try {
+                await api.post('/logout')
+              } catch (e) {
+                console.warn('Logout failed:', e?.message || e)
+              } finally {
+                this.$router.push('/')
+              }
+            },
             async selectChat(chat) {
               if (this.selectedChat && this.selectedChat.id === chat.id) {
                 return
@@ -726,8 +735,33 @@
     <div class="row h-100">
       
       <div class="col-md-4 col-lg-3 border-end p-0 bg-light d-flex flex-column h-100">
-        <div class="p-3 border-bottom bg-white">
+        <div class="p-3 border-bottom bg-white d-flex align-items-center gap-2">
+          <button
+            class="btn p-0 border-0 bg-transparent"
+            type="button"
+            data-bs-toggle="offcanvas"
+            data-bs-target="#offcanvasWithBothOptions"
+            aria-controls="offcanvasWithBothOptions"
+          >
+            <img src="/menu.svg" alt="Menu" style="width: 20px; height: 20px;">
+          </button>
           <h5 class="mb-0">Le mie Chat</h5>
+        </div>
+
+        <div
+          class="offcanvas offcanvas-start"
+          data-bs-scroll="true"
+          tabindex="-1"
+          id="offcanvasWithBothOptions"
+          aria-labelledby="offcanvasWithBothOptionsLabel"
+        >
+          <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="offcanvasWithBothOptionsLabel">Menu</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+          </div>
+          <div class="offcanvas-body">
+            <button type="button" class="btn btn-outline-danger w-100" @click="logoutUser">Logout</button>
+          </div>
         </div>
 
         <div class="list-group list-group-flush overflow-auto flex-grow-1">

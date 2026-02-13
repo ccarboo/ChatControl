@@ -14,7 +14,6 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://localhost:5173", 
-        "https://0.0.0.0:5173",
         "https://192.168.1.228:5173",
         "https://server.apernici.it",
         "https://apernici.it",
