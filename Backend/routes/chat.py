@@ -42,13 +42,11 @@ async def chat_events(websocket: WebSocket, chat_id: int):
         data['active_chat_id'] = None
         await disconnect_socket(temp_id, chat_id, websocket)
 
-
 def is_group_chat_id(chat_id: int) -> bool:
     try:
         return int(chat_id) < 0
     except Exception:
         return False
-
 
 @router.get("/chats")
 async def get_chats(login_session: str = Cookie(None), offset_date: str = None):
@@ -98,10 +96,15 @@ async def get_chats(login_session: str = Cookie(None), offset_date: str = None):
             risultati = cursor.fetchall()
             
             encrypted_ids = {row[0] for row in risultati}
-           
+
+            chats_data = data.get('data', {}).get('chats', {})
+
             for chat in chats:
                 chat_id_hash = hashlib.sha256(pepper.encode() + str(chat['id']).encode()).hexdigest()
-                chat['cyphered'] = chat_id_hash in encrypted_ids
+                has_remote_key = chat_id_hash in encrypted_ids
+                chat_data = chats_data.get(chat_id_hash, {})
+                has_own_key = bool(chat_data.get('chiave', {}).get('pubblica'))
+                chat['cyphered'] = has_remote_key or has_own_key
                 
     except sqlite3.Error as error:
         raise HTTPException(status_code=500, detail=str(error))
@@ -458,12 +461,16 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
         
         if message['is_json'] == True:
             cif_flag = message['json'].get('CIF') or message['json'].get('cif')
-            if cif_flag == "in":
+            if cif_flag == "in":            
                 if my_id and message.get('sender_id') == my_id:
                     message['is_json'] = False
+                    message['text'] = None
+                    message['chiave'] = "Questo messaggio e' uno scambio di chiave"
+                    message['is_system'] = True
                     continue
                 pubblic = message['json'].get('public')
                 if pubblic is None or not is_valid_age_public_key(pubblic):
+                    
                     continue
                 store_public_key_in_vault(
                     data,
@@ -474,7 +481,10 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                     is_group=is_group_chat_id(chat_id),
                     group_title=getattr(entity, 'title', 'Gruppo')
                 )
-                    
+                message['text'] = None
+                message['chiave'] = "Questo messaggio e' uno scambio di chiave"
+                message['is_system'] = True
+                
             if cif_flag == "on":
                 text = message['json'].get('text')
                 timestamp = message.get('date')
@@ -609,7 +619,7 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                                 message['is_json'] = False
                                 continue
                             message['text'] = dizionario['text']
-                                
+                            message['secure'] = True
                             data['ids_'].add(id_message_decifrato_caption)
 
                             
@@ -762,6 +772,8 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                             message['text'] = dizionario['text']
                             message['mime'] = dizionario['mime']
                             message['size'] = dizionario['size']
+                            message['secure'] = True
+
                             data['ids_'].add(id_message_decifrato)
 
                             if 'json' in message:
@@ -897,6 +909,7 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                                 if 'json' in message:
                                     del message['json']
                                 message['is_json'] = False
+                                message['secure'] = True
                                 message['file'] = False
                                 message.pop('media_type', None)
                                 message.pop('filename', None)
@@ -1098,7 +1111,6 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
         "total_keys": len(existing_keys)
     }
 
-
 @router.get("/media/download/{chat_id}/{message_id}")
 async def download_media(chat_id: int, message_id: int, login_session: str = Cookie(None)):
     from fastapi.responses import StreamingResponse
@@ -1159,7 +1171,6 @@ async def download_media(chat_id: int, message_id: int, login_session: str = Coo
         traceback.print_exc()
         raise HTTPException(status_code=502, detail=f"Errore download: {str(e)}")
     
-
 @router.get("/media/cifrato/download/{chat_id}/{message_id}")
 async def download_encrypt_media(chat_id: int, message_id: int, login_session: str = Cookie(None)):
     data = is_logged_in(login_session)

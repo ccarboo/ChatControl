@@ -814,16 +814,24 @@
                v-for="m in messaggi" 
                :key="m.id" 
                class="message-wrapper"
-               :class="{ 'message-out': m.out, 'message-in': !m.out }"
+               :class="{ 'message-out': m.out, 'message-in': !m.out, 'message-system': !!m.chiave }"
                @contextmenu.prevent="openMessageMenu($event, m)"
                @touchstart="handleMessageTouchStart($event, m)"
                @touchmove="handleMessageTouchMove($event)"
                @touchend="handleMessageTouchEnd"
                @touchcancel="handleMessageTouchEnd"
              >
-               <div class="message-bubble" :class="{ 'message-error': m.error }">
-                 <div class="message-header" >
-                   {{ m.out ? 'Tu' : (m.sender_username || m.sender_id) }}
+               <div class="message-bubble" :class="{ 'message-error': m.error, 'message-system-bubble': !!m.chiave }">
+                 <div v-if="!m.chiave" class="message-header">
+                   <span class="message-sender">
+                     {{ m.out ? 'Tu' : (m.sender_username || m.sender_id) }}
+                   </span>
+                   <img
+                     v-if="m.secure"
+                     src="/lock.svg"
+                     alt="Cifrato"
+                     class="message-secure-icon"
+                   >
                  </div>
                  <div v-if="m.file">
                    <!-- Documenti -->
@@ -877,7 +885,15 @@
                    </div>
                  </div>
                  <div class="message-text" v-if="!m.error">
-                    {{ m.text }}
+                    <template v-if="m.chiave">
+                      <div class="message-system-content">
+                        <img src="/key.svg" alt="Chiave" class="message-key-icon">
+                        <span class="message-system-key">{{ m.chiave }}</span>
+                      </div>
+                    </template>
+                    <template v-else>
+                      {{ m.text }}
+                    </template>
                   </div>
                   <div class="message-text" v-else>
                       {{m.error}}<img 
@@ -1065,11 +1081,64 @@
   word-wrap: break-word;
 }
 
+.message-system-bubble {
+  max-width: 90%;
+  background-color: #f3f4f6;
+  color: #374151;
+  border: 1px dashed #d1d5db;
+  border-radius: 999px;
+  box-shadow: none;
+}
+
 .message-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-weight: 600;
   font-size: 0.85rem;
   margin-bottom: 4px;
   color: #7c3aed; 
+}
+
+.message-secure-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.message-key-icon {
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+  vertical-align: middle;
+  filter: grayscale(1) brightness(0.6);
+}
+
+.message-system-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.message-system-label {
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #6b7280;
+  font-weight: 600;
+}
+
+.message-system-key {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background-color: #ffffff;
+  border: 1px solid #e5e7eb;
+  color: #111827;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  font-size: 0.85rem;
 }
 
 .message-out .message-bubble {
@@ -1117,6 +1186,7 @@
   opacity: 0.7;
   text-align: right;
 }
+
 
 .overflow-auto::-webkit-scrollbar {
   width: 5px;
