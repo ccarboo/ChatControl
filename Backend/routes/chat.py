@@ -1,12 +1,10 @@
-from fastapi import APIRouter, Cookie, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Cookie, WebSocket, WebSocketDisconnect
 import sqlite3
 from fastapi import HTTPException
-from pydantic import BaseModel
 from database.sqlite import get_connection
 from config import pepper
-import time
 import hashlib
-from utils import decifra_vault, cifra_vault, is_logged_in, is_valid_age_public_key, store_public_key_in_vault
+from utils import cifra_vault, is_logged_in, is_valid_age_public_key, store_public_key_in_vault, is_group_chat_id, decifra_file_con_age, build_candidate_privates, set_media
 from realtime import connect_socket, disconnect_socket, register_telethon_handlers, index_messages
 from telethon.tl.types import DocumentAttributeAnimated
 from datetime import datetime, timedelta
@@ -14,9 +12,15 @@ import json
 import base64
 import subprocess
 import tempfile
-                                
+from databaseInteractions import get_gruppo_vault, get_chat_vault
+from fastapi.responses import StreamingResponse
+import io
+import os
+import mimetypes
+
 router = APIRouter()
 
+#questa funzione inizializza la WebSocket per l'aggiornamento in tempo reali dei messaggi
 @router.websocket("/ws/chats/{chat_id}")
 async def chat_events(websocket: WebSocket, chat_id: int):
     login_session = websocket.cookies.get("login_session")
@@ -41,12 +45,6 @@ async def chat_events(websocket: WebSocket, chat_id: int):
         data['ids_'] = set()
         data['active_chat_id'] = None
         await disconnect_socket(temp_id, chat_id, websocket)
-
-def is_group_chat_id(chat_id: int) -> bool:
-    try:
-        return int(chat_id) < 0
-    except Exception:
-        return False
 
 @router.get("/chats")
 async def get_chats(login_session: str = Cookie(None), offset_date: str = None):
@@ -81,6 +79,8 @@ async def get_chats(login_session: str = Cookie(None), offset_date: str = None):
         chats.append(chat_info)
         
     username = hashlib.sha256(pepper.encode() + data['data']['username'].encode()).hexdigest()
+    #la parte di codice sottostante serve per capire se la chat contiene gia' delle chiavi pubbliche 
+    # inizializzate dal nostro dispositivo, oppure no
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -124,7 +124,6 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
         data['ids_'] = set()
 
     client = data['client']
-    username = hashlib.sha256(pepper.encode() + data['data']['username'].encode()).hexdigest()
     if not client.is_connected():
         await client.connect()
 
@@ -156,51 +155,7 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
         
         # Estrai dati del media se presente
         if msg.media:
-            message_data['file'] = True
-            
-            # Controlla PRIMA sticker e gif (altrimenti finiscono come documenti)
-            if msg.sticker:
-                document = msg.sticker
-                is_animated = any(
-                    isinstance(attr, DocumentAttributeAnimated)
-                    for attr in (document.attributes or [])
-                )
-                mime = document.mime_type or 'image/webp'
-                if is_animated or mime in ('application/x-tgsticker', 'video/webm'):
-                    message_data['media_type'] = 'sticker_animated'
-                else:
-                    message_data['media_type'] = 'sticker'
-                message_data['size'] = document.size
-                message_data['mime'] = mime
-            
-            elif msg.gif:
-                message_data['media_type'] = 'gif'
-                message_data['size'] = msg.gif.size
-                message_data['mime'] = msg.gif.mime_type or 'video/mp4'
-            
-            # Documenti generici
-            elif msg.document:
-                document = msg.document
-                message_data['media_type'] = 'document'
-                message_data['filename'] = None
-                message_data['mime'] = document.mime_type or 'application/octet-stream'
-                message_data['size'] = document.size or 0
-                
-                for attr in (document.attributes or []):
-                    if hasattr(attr, 'file_name'):
-                        message_data['filename'] = attr.file_name
-                        break
-            
-            # Foto
-            elif msg.photo:
-                message_data['media_type'] = 'photo'
-                message_data['size'] = msg.photo.size if hasattr(msg.photo, 'size') else 0
-            
-            # Video
-            elif msg.video:
-                message_data['media_type'] = 'video'
-                message_data['size'] = msg.video.size if hasattr(msg.video, 'size') else 0
-                message_data['mime'] = msg.video.mime_type if hasattr(msg.video, 'mime_type') else 'video/mp4'
+            set_media(msg, message_data)
         
         messages.append(message_data)
 
@@ -268,9 +223,6 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
         if current_delta < min_delta:
             window_start = window_end - min_delta
 
-    # A questo punto "window" è una coppia di date (inizio, fine)
-    # o None se non abbiamo potuto calcolarla.
-    window = (window_start, window_end) if window_start and window_end else None
     # Se abbiamo una finestra temporale valida, carichiamo tramite Telethon
     # tutti i messaggi compresi tra window_start e window_end.
     messages_in_window = []
@@ -301,96 +253,9 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
             }
 
             if msg.media:
-                message_data['file'] = True
-
-                if msg.sticker:
-                    document = msg.sticker
-                    is_animated = any(
-                        isinstance(attr, DocumentAttributeAnimated)
-                        for attr in (document.attributes or [])
-                    )
-                    mime = document.mime_type or 'image/webp'
-                    if is_animated or mime in ('application/x-tgsticker', 'video/webm'):
-                        message_data['media_type'] = 'sticker_animated'
-                    else:
-                        message_data['media_type'] = 'sticker'
-                    message_data['size'] = document.size
-                    message_data['mime'] = mime
-
-                elif msg.gif:
-                    message_data['media_type'] = 'gif'
-                    message_data['size'] = msg.gif.size
-                    message_data['mime'] = msg.gif.mime_type or 'video/mp4'
-
-                elif msg.document:
-                    document = msg.document
-                    message_data['media_type'] = 'document'
-                    message_data['filename'] = None
-                    message_data['mime'] = document.mime_type or 'application/octet-stream'
-                    message_data['size'] = document.size or 0
-
-                    for attr in (document.attributes or []):
-                        if hasattr(attr, 'file_name'):
-                            message_data['filename'] = attr.file_name
-                            break
-
-                elif msg.photo:
-                    message_data['media_type'] = 'photo'
-                    message_data['size'] = msg.photo.size if hasattr(msg.photo, 'size') else 0
-
-                elif msg.video:
-                    message_data['media_type'] = 'video'
-                    message_data['size'] = msg.video.size if hasattr(msg.video, 'size') else 0
-                    message_data['mime'] = msg.video.mime_type if hasattr(msg.video, 'mime_type') else 'video/mp4'
+                set_media(msg, message_data)
 
             messages_in_window.append(message_data)
-
-   # for message in messages_in_window:
-
-    print(messages_in_window)
-    def build_candidate_privates(chat_keys, timestamp):
-        timestamp_unix = timestamp.timestamp() if timestamp else None
-        candidate_privates = []
-
-        chiave_corrente = chat_keys.get('chiave', {})
-        chiavi_storiche = chat_keys.get('chiavi', [])
-        chiavi_storiche_sorted = sorted(
-            [c for c in chiavi_storiche if c.get('privata')],
-            key=lambda c: c.get('inizio', 0),
-            reverse=True
-        )
-
-        if timestamp_unix:
-            inizio_corrente = chiave_corrente.get('inizio', 0)
-            if timestamp_unix >= inizio_corrente:
-                chiave_stimata = chiave_corrente
-            else:
-                chiave_stimata = None
-                for chiave_storica in chiavi_storiche_sorted:
-                    inizio = chiave_storica.get('inizio', 0)
-                    fine = chiave_storica.get('fine')
-                    if fine is None and timestamp_unix >= inizio:
-                        chiave_stimata = chiave_storica
-                        break
-                    elif fine is not None and inizio <= timestamp_unix <= fine:
-                        chiave_stimata = chiave_storica
-                        break
-
-            if chiave_stimata and chiave_stimata.get('privata'):
-                candidate_privates.append(chiave_stimata.get('privata'))
-
-            if chiavi_storiche_sorted:
-                chiave_precedente = chiavi_storiche_sorted[0]
-                if chiave_precedente.get('privata') and chiave_precedente.get('privata') != (chiave_stimata.get('privata') if chiave_stimata else None):
-                    candidate_privates.append(chiave_precedente.get('privata'))
-        else:
-            if chiave_corrente.get('privata'):
-                candidate_privates.append(chiave_corrente.get('privata'))
-            if chiavi_storiche_sorted and chiavi_storiche_sorted[0].get('privata'):
-                candidate_privates.append(chiavi_storiche_sorted[0].get('privata'))
-
-        return candidate_privates
-
 
     chats_data = data['data'].get('chats', {})
     chat_keys = chats_data.get(chat_id_cif, {})
@@ -970,40 +835,10 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
     
     try:
         if is_group:
-            with get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """SELECT vault FROM contatti_gruppo WHERE proprietario = ? AND gruppo_id = ?""",
-                    (username, chat_id_cif)
-                )
-                risultato = cursor.fetchone()
-                if not risultato or not risultato[0]:
-                    vault_deciphered = {
-                        'gruppo_id': chat_id,
-                        'gruppo_nome': getattr(entity, 'title', 'Gruppo'),
-                        'partecipanti': {}
-                    }
-                    insert_new_vault = True
-                else:
-                    vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
+            insert_new_vault, vault_deciphered = get_gruppo_vault(username, chat_id, entity, data)
         else:
-            with get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """SELECT vault FROM contatti WHERE proprietario = ? AND contatto_id = ?""",
-                    (username, chat_id_cif)
-                )
-                risultato = cursor.fetchone()
-                if not risultato or not risultato[0]:
-                    sender = await client.get_entity(chat_id)
-                    vault_deciphered = {
-                        'user_id': chat_id,
-                        'username': getattr(sender, 'username', str(chat_id)) if sender else str(chat_id),
-                        'chiavi': []
-                    }
-                    insert_new_vault = True
-                else:
-                    vault_deciphered = decifra_vault(risultato[0], data['data']['masterkey'])
+            insert_new_vault, vault_deciphered = await get_chat_vault(username, chat_id, client, data)
+
     except sqlite3.Error as error:
         raise HTTPException(status_code=500, detail=str(error))
 
@@ -1113,8 +948,7 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
 
 @router.get("/media/download/{chat_id}/{message_id}")
 async def download_media(chat_id: int, message_id: int, login_session: str = Cookie(None)):
-    from fastapi.responses import StreamingResponse
-    import io
+    
     
     _, data = is_logged_in(login_session, False)
     client = data['client']
@@ -1179,81 +1013,6 @@ async def download_encrypt_media(chat_id: int, message_id: int, login_session: s
     if not client.is_connected():
         await client.connect()
     
-    from fastapi.responses import StreamingResponse
-    import io
-    import os
-    import mimetypes
-    
-    def build_candidate_privates(chat_id_hash: str, timestamp):
-        timestamp_unix = timestamp.timestamp() if timestamp else None
-        chats_data = data['data'].get('chats', {})
-        chat_keys = chats_data.get(chat_id_hash, {})
-
-        candidate_privates = []
-        chiave_corrente = chat_keys.get('chiave', {})
-        chiavi_storiche = chat_keys.get('chiavi', [])
-        chiavi_storiche_sorted = sorted(
-            [c for c in chiavi_storiche if c.get('privata')],
-            key=lambda c: c.get('inizio', 0),
-            reverse=True
-        )
-
-        if timestamp_unix:
-            inizio_corrente = chiave_corrente.get('inizio', 0)
-            if timestamp_unix >= inizio_corrente:
-                chiave_stimata = chiave_corrente
-            else:
-                chiave_stimata = None
-                for chiave_storica in chiavi_storiche_sorted:
-                    inizio = chiave_storica.get('inizio', 0)
-                    fine = chiave_storica.get('fine')
-                    if fine is None and timestamp_unix >= inizio:
-                        chiave_stimata = chiave_storica
-                        break
-                    elif fine is not None and inizio <= timestamp_unix <= fine:
-                        chiave_stimata = chiave_storica
-                        break
-
-            if chiave_stimata and chiave_stimata.get('privata'):
-                candidate_privates.append(chiave_stimata.get('privata'))
-
-            if chiavi_storiche_sorted:
-                chiave_precedente = chiavi_storiche_sorted[0]
-                if chiave_precedente.get('privata') and chiave_precedente.get('privata') != (chiave_stimata.get('privata') if chiave_stimata else None):
-                    candidate_privates.append(chiave_precedente.get('privata'))
-        else:
-            if chiave_corrente.get('privata'):
-                candidate_privates.append(chiave_corrente.get('privata'))
-            if chiavi_storiche_sorted and chiavi_storiche_sorted[0].get('privata'):
-                candidate_privates.append(chiavi_storiche_sorted[0].get('privata'))
-
-        return candidate_privates
-
-    def decrypt_with_age(ciphertext, candidate_privates):
-        for privata in candidate_privates:
-            try:
-                try:
-                    input_bytes = base64.b64decode(ciphertext)
-                except Exception:
-                    input_bytes = ciphertext if isinstance(ciphertext, (bytes, bytearray)) else str(ciphertext).encode()
-
-                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
-                    keyfile.write(privata)
-                    keyfile_path = keyfile.name
-                try:
-                    result = subprocess.run(
-                        ['age', '-d', '-i', keyfile_path],
-                        input=input_bytes,
-                        capture_output=True,
-                        check=True
-                    )
-                    return result.stdout
-                finally:
-                    os.unlink(keyfile_path)
-            except Exception:
-                continue
-        return None
-
     try:
         entity = await client.get_entity(chat_id)
         message = await client.get_messages(entity, ids=message_id)
@@ -1289,7 +1048,9 @@ async def download_encrypt_media(chat_id: int, message_id: int, login_session: s
             raise HTTPException(status_code=400, detail="Caption non cifrata")
 
         chat_id_cif = hashlib.sha256(pepper.encode() + str(chat_id).encode()).hexdigest()
-        candidate_privates = build_candidate_privates(chat_id_cif, message.date)
+        chats_data = data['data'].get('chats', {})
+        chat_keys = chats_data.get(chat_id_cif, {})
+        candidate_privates = build_candidate_privates(chat_keys, message.date)
         if not candidate_privates:
             raise HTTPException(status_code=400, detail="Nessuna chiave disponibile")
 
@@ -1307,7 +1068,7 @@ async def download_encrypt_media(chat_id: int, message_id: int, login_session: s
             raise HTTPException(status_code=400, detail="Header metadata non valido")
 
         header_encrypted_metadata = encrypted_payload_bytes[8:8 + header_encrypted_size]
-        decrypted_metadata_bytes = decrypt_with_age(header_encrypted_metadata, candidate_privates)
+        decrypted_metadata_bytes = decifra_file_con_age(header_encrypted_metadata, candidate_privates)
         if not decrypted_metadata_bytes:
             raise HTTPException(status_code=400, detail="Impossibile decifrare i metadata")
 
@@ -1324,7 +1085,7 @@ async def download_encrypt_media(chat_id: int, message_id: int, login_session: s
             raise HTTPException(status_code=400, detail="Metadata esterni non cifrati")
 
         encrypted_body = encrypted_payload_bytes[8 + header_encrypted_size:]
-        decrypted_payload = decrypt_with_age(encrypted_body, candidate_privates)
+        decrypted_payload = decifra_file_con_age(encrypted_body, candidate_privates)
         if not decrypted_payload:
             raise HTTPException(status_code=400, detail="Impossibile decifrare il file")
 

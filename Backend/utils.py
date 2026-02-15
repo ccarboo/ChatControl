@@ -12,7 +12,9 @@ import sqlite3
 from database.sqlite import get_connection
 import hashlib
 from config import pepper
-
+import os
+import tempfile
+from telethon.tl.types import DocumentAttributeAnimated
 
 SECRET_KEY = secret_key.encode()
 cipher = Fernet(SECRET_KEY)
@@ -70,6 +72,31 @@ def cifra_con_age(plaintext: str | bytes, public_keys: list):
     except subprocess.CalledProcessError as e:
         print(f"Errore cifratura age: {e.stderr}")
         return None
+
+def decifra_file_con_age(ciphertext, candidate_privates):
+    for privata in candidate_privates:
+        try:
+            try:
+                input_bytes = base64.b64decode(ciphertext)
+            except Exception:
+                input_bytes = ciphertext if isinstance(ciphertext, (bytes, bytearray)) else str(ciphertext).encode()
+
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
+                keyfile.write(privata)
+                keyfile_path = keyfile.name
+            try:
+                result = subprocess.run(
+                    ['age', '-d', '-i', keyfile_path],
+                    input=input_bytes,
+                    capture_output=True,
+                    check=True
+                )
+                return result.stdout
+            finally:
+                os.unlink(keyfile_path)
+        except Exception:
+            continue
+    return None
 
 def genera_chiavi():
     try:
@@ -338,3 +365,102 @@ def get_chat_chyper_keys(data, chat_id1):
 
     else:
         return recipient_keys
+
+def build_candidate_privates(chat_keys: str, timestamp):
+    timestamp_unix = timestamp.timestamp() if timestamp else None
+    
+
+    candidate_privates = []
+    chiave_corrente = chat_keys.get('chiave', {})
+    chiavi_storiche = chat_keys.get('chiavi', [])
+    chiavi_storiche_sorted = sorted(
+        [c for c in chiavi_storiche if c.get('privata')],
+        key=lambda c: c.get('inizio', 0),
+        reverse=True
+    )
+
+    if timestamp_unix:
+        inizio_corrente = chiave_corrente.get('inizio', 0)
+        if timestamp_unix >= inizio_corrente:
+            chiave_stimata = chiave_corrente
+        else:
+            chiave_stimata = None
+            for chiave_storica in chiavi_storiche_sorted:
+                inizio = chiave_storica.get('inizio', 0)
+                fine = chiave_storica.get('fine')
+                if fine is None and timestamp_unix >= inizio:
+                    chiave_stimata = chiave_storica
+                    break
+                elif fine is not None and inizio <= timestamp_unix <= fine:
+                    chiave_stimata = chiave_storica
+                    break
+
+        if chiave_stimata and chiave_stimata.get('privata'):
+            candidate_privates.append(chiave_stimata.get('privata'))
+
+        if chiavi_storiche_sorted:
+            chiave_precedente = chiavi_storiche_sorted[0]
+            if chiave_precedente.get('privata') and chiave_precedente.get('privata') != (chiave_stimata.get('privata') if chiave_stimata else None):
+                candidate_privates.append(chiave_precedente.get('privata'))
+    else:
+        if chiave_corrente.get('privata'):
+            candidate_privates.append(chiave_corrente.get('privata'))
+        if chiavi_storiche_sorted and chiavi_storiche_sorted[0].get('privata'):
+            candidate_privates.append(chiavi_storiche_sorted[0].get('privata'))
+
+    return candidate_privates
+
+#questa funzione ritorna se la chat e' un gruppo oppure no
+def is_group_chat_id(chat_id: int) -> bool:
+    try:
+        return int(chat_id) < 0
+    except Exception:
+        return False
+    
+#questa funzione mi gestisce i media per renderli comprensibili al frontend
+def set_media(msg, message_data):
+    message_data['file'] = True
+            
+    # Controlla PRIMA sticker e gif (altrimenti finiscono come documenti)
+    if msg.sticker:
+        document = msg.sticker
+        is_animated = any(
+            isinstance(attr, DocumentAttributeAnimated)
+            for attr in (document.attributes or [])
+        )
+        mime = document.mime_type or 'image/webp'
+        if is_animated or mime in ('application/x-tgsticker', 'video/webm'):
+            message_data['media_type'] = 'sticker_animated'
+        else:
+            message_data['media_type'] = 'sticker'
+        message_data['size'] = document.size
+        message_data['mime'] = mime
+    
+    elif msg.gif:
+        message_data['media_type'] = 'gif'
+        message_data['size'] = msg.gif.size
+        message_data['mime'] = msg.gif.mime_type or 'video/mp4'
+    
+    # Documenti generici
+    elif msg.document:
+        document = msg.document
+        message_data['media_type'] = 'document'
+        message_data['filename'] = None
+        message_data['mime'] = document.mime_type or 'application/octet-stream'
+        message_data['size'] = document.size or 0
+        
+        for attr in (document.attributes or []):
+            if hasattr(attr, 'file_name'):
+                message_data['filename'] = attr.file_name
+                break
+    
+    # Foto
+    elif msg.photo:
+        message_data['media_type'] = 'photo'
+        message_data['size'] = msg.photo.size if hasattr(msg.photo, 'size') else 0
+    
+    # Video
+    elif msg.video:
+        message_data['media_type'] = 'video'
+        message_data['size'] = msg.video.size if hasattr(msg.video, 'size') else 0
+        message_data['mime'] = msg.video.mime_type if hasattr(msg.video, 'mime_type') else 'video/mp4'

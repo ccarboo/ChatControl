@@ -1,16 +1,13 @@
 from fastapi import APIRouter, Cookie
 import asyncio
-import sqlite3
 from fastapi import HTTPException
 from pydantic import BaseModel
-from database.sqlite import get_connection
 from config import pepper
 import time
 import hashlib
-from utils import  is_logged_in, decifra_vault, cifra_con_age, genera_chiavi, cifra_vault, get_chat_chyper_keys, get_group_chyper_keys, split_message
+from utils import  is_logged_in, cifra_con_age, genera_chiavi, cifra_vault, get_chat_chyper_keys, get_group_chyper_keys, split_message
 import json
 from fastapi import UploadFile, File, Form
-import subprocess
 import tempfile
 import shutil
 from telethon.tl.types import DocumentAttributeFilename
@@ -18,6 +15,7 @@ import os
 import secrets
 import mimetypes
 import io
+from databaseInteractions import set_user_vault
 
 router = APIRouter()
 
@@ -38,6 +36,7 @@ class delete_m(BaseModel):
 class iniz (BaseModel):
     chat_id: int
 
+#verifica se la "public key" e' arrivata ai server di telegram e quindi e' valida
 async def wait_for_public_key_message(client, chat_id: int, public_key: str, timeout: float = 2.0, interval: float = 0.2) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -52,6 +51,7 @@ async def wait_for_public_key_message(client, chat_id: int, public_key: str, tim
         await asyncio.sleep(interval)
     return False
     
+#questa funzione si occupa di eliminare un messaggio
 @router.post("/messages/delete")
 async def delete(message: delete_m, login_session: str = Cookie(None)):
     _, data = is_logged_in(login_session, True)
@@ -68,6 +68,7 @@ async def delete(message: delete_m, login_session: str = Cookie(None)):
     except Exception:
         raise HTTPException(status_code=502, detail="Non hai il permesso di cancellare questo messaggio")
 
+#questa funzione invia un file, puo' inviarlo sia cifrato che non
 @router.post("/messages/send/file")
 async def s_file(chat_id: int = Form(...), text: str = Form(""), cryph: bool = Form(False),group: bool = Form(False), file: UploadFile = File(...),login_session: str = Cookie(None)):
     _, data = is_logged_in(login_session, True)
@@ -200,6 +201,7 @@ async def s_file(chat_id: int = Form(...), text: str = Form(""), cryph: bool = F
             print(e)
             raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
         
+#questa funzione invia un messaggio normale o cifrato
 @router.post("/messages/send")
 async def s_message( credentials: message, login_session: str = Cookie(None)):
     _, data = is_logged_in(login_session, True)
@@ -226,6 +228,7 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
         chat_data = data.get('data', {}).get('chats', {}).get(chat_id_hash, {})
         chiave_corrente_chat = chat_data.get('chiave', {})
 
+        #un controllo che invia una chiave pubblica se non ne e' gia stata inviata una in questa chat
         if not chiave_corrente_chat or not chiave_corrente_chat.get('pubblica'):
             key_response = await send_public_key(iniz(chat_id=credentials.chat_id), login_session)
             public_key = key_response.get("public") if isinstance(key_response, dict) else None
@@ -236,6 +239,8 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
             chat_data = data.get('data', {}).get('chats', {}).get(chat_id_hash, {})
             chiave_corrente_chat = chat_data.get('chiave', {})
 
+        #questa parte toglie il rischio di cifrare il messaggio con la chiave pubblica precedente
+        #nel caso sia stata inviata molto recentemente
         inizio_corrente = chiave_corrente_chat.get('inizio') if chiave_corrente_chat else None
         if inizio_corrente:
             elapsed = time.time() - inizio_corrente
@@ -268,7 +273,9 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
         if text_cyp is None:
             raise HTTPException(status_code=500, detail="Errore durante la cifratura con age")
         
-        
+        #questa parte controlla che il messaggio sia entro i limiti di splittamento di telegram
+        #ovvero 4096 caratteri, nel caso positivo gestisce l'invio del messaggio come file,
+        #per evitare splittamenti
         if len(text_cyp) + len(encrypted_id) + 11 > MESSAGE_LIMIT:
             token = secrets.token_hex(8)
             nome_file = token + ".dat"
@@ -321,6 +328,7 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
             raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
     return {"status":"ok"}
 
+#questa funzione invia la chiave pubblica alla chat designata
 @router.post("/messages/initializing")
 async def send_public_key(credentials: iniz, login_session: str = Cookie(None)):
     _, data = is_logged_in(login_session, True)
@@ -366,16 +374,7 @@ async def send_public_key(credentials: iniz, login_session: str = Cookie(None)):
     username = hashlib.sha256(pepper.encode() + data['data']['username'].encode()).hexdigest()
     vault_cifrato = cifra_vault(data['data'], data['data']['masterkey'])
     
-    try:
-        with get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """UPDATE utenti SET vault = ? WHERE username = ?""",
-                (vault_cifrato, username)
-            )
-            conn.commit()
-    except sqlite3.Error as error:
-        raise HTTPException(status_code=500, detail=str(error))
+    set_user_vault(username, vault_cifrato)
 
     message_payload = {
         "cif":"in",

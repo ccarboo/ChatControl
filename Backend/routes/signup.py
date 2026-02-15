@@ -14,6 +14,7 @@ import hashlib
 import time
 from utils import deriva_master_key, cifra_vault, login_cache
 from realtime import register_telethon_handlers
+from databaseInteractions import check_username_unicity
 
 router = APIRouter()
 
@@ -35,6 +36,7 @@ class signupped_2fa(BaseModel):
 
 signup_cache = {}
 
+#funzione primo step della creazione di un utente
 @router.post("/signup/step1")
 async def create_user(credentials: UserData, response: Response):
     client = TelegramClient(StringSession(), credentials.api_id, credentials.api_hash)
@@ -45,22 +47,7 @@ async def create_user(credentials: UserData, response: Response):
     salt = secrets.token_bytes(16)
     username = hashlib.sha256(pepper.encode() + credentials.username.encode()).hexdigest()
 
-    try:
-        with get_connection() as conn:
-            cursor = conn.cursor()
-            params = (username,)  
-            cursor.execute(
-                "SELECT * FROM utenti WHERE username = ? LIMIT 1",
-                params,
-            )
-            risultati = cursor.fetchone()
-            if risultati != None:
-                raise HTTPException(status_code=409,detail='username already exists')
-    except sqlite3.Error as error:
-        raise HTTPException(status_code=500, detail=str(error))
-    
-    
-
+    check_username_unicity(username)
 
     global signup_cache
     signup_cache[temp_id] = {
@@ -87,6 +74,7 @@ async def create_user(credentials: UserData, response: Response):
     
     return {"status": "SMS inviato"}
      
+#questa funzione si occupa dell'avvio della sessione tramite l'SMS
 @router.post("/signup/step2")
 async def sign_up_verify(credentials: signupped, signup_session: str = Cookie(None), response: Response=None):
     if not signup_session:
@@ -159,6 +147,7 @@ async def sign_up_verify(credentials: signupped, signup_session: str = Cookie(No
 
     return {"status": "Account creato!"}
 
+#questa funzione si occupa dell'avvio della sessione se presente la verica a due fattori
 @router.post("/signup/step3")
 async def sign_up_verify_password(credentials: signupped_2fa, signup_session: str = Cookie(None), response: Response = None):
     if not signup_session:
