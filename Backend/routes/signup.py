@@ -87,7 +87,6 @@ async def create_user(credentials: UserData, response: Response):
     
     return {"status": "SMS inviato"}
      
-
 @router.post("/signup/step2")
 async def sign_up_verify(credentials: signupped, signup_session: str = Cookie(None), response: Response=None):
     if not signup_session:

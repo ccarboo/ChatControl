@@ -192,7 +192,10 @@
                   this.chats = response.data.chats
                 this.lastChatsAt = now
               } catch (e) {
-                  this.errormsg = e.response?.data?.message || e.message
+                  this.errormsg = e.response?.data?.detail || e.message
+                  if(this.errormsg === "Sessione scaduta. Riesegui il login."){
+                    this.$router.push('/')
+                  }
               } finally {
                 this.chatsInFlight = false
                   this.loading = false
@@ -238,7 +241,10 @@
                     setTimeout(() => this.initAnimatedStickers(), 100)
                   })
               } catch (e) {
-                  this.errormsg = e.response?.data?.message || e.message
+                  this.errormsg = e.response?.data?.detail || e.message
+                  if(this.errormsg === "Sessione scaduta. Riesegui il login."){
+                    this.$router.push('/')
+                  }
               } finally {
                   this.loading = false
               }
@@ -256,7 +262,10 @@
                   this.mergeLatestMessages(response.data.messages)
                 return response.data.messages || []
               } catch (e) {
-                  this.errormsg = e.response?.data?.message || e.message
+                  this.errormsg = e.response?.data?.detail || e.message
+                  if(this.errormsg === "Sessione scaduta. Riesegui il login."){
+                    this.$router.push('/')
+                  }
               } finally {
                   this.loading = false
               }
@@ -398,7 +407,10 @@
                   
                 }
               } catch (e) {
-                  this.errormsg = e.response?.data?.message || e.message
+                  this.errormsg = e.response?.data?.detail || e.message
+                  if(this.errormsg === "Sessione scaduta. Riesegui il login."){
+                    this.$router.push('/')
+                  }
               } finally {
                   this.file = null
                   this.$refs.fileInput.value = '';
@@ -510,7 +522,10 @@
                   response = await api.get(`/chats/${chat.id}/inits`, { withCredentials: true })
                   console.log('init chat:', response.data)
               } catch (e) {
-                  console.error('Errore init chat:', e)
+                  this.errormsg = e.response?.data?.detail || e.message
+                  if(this.errormsg === "Sessione scaduta. Riesegui il login."){
+                    this.$router.push('/')
+                  }
               }
             },
             scrollToBottom() {

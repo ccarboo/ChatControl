@@ -6,7 +6,7 @@ from database.sqlite import get_connection
 from config import pepper
 import time
 import hashlib
-from utils import decifra_vault, cifra_vault, is_logged_in, is_valid_age_public_key, resolve_login_session, store_public_key_in_vault
+from utils import decifra_vault, cifra_vault, is_logged_in, is_valid_age_public_key, store_public_key_in_vault
 from realtime import connect_socket, disconnect_socket, register_telethon_handlers, index_messages
 from telethon.tl.types import DocumentAttributeAnimated
 from datetime import datetime, timedelta
@@ -21,7 +21,7 @@ router = APIRouter()
 async def chat_events(websocket: WebSocket, chat_id: int):
     login_session = websocket.cookies.get("login_session")
     try:
-        temp_id, data = resolve_login_session(login_session)
+        temp_id, data = is_logged_in(login_session, False)
     except HTTPException:
         await websocket.close(code=1008)
         return
@@ -51,7 +51,7 @@ def is_group_chat_id(chat_id: int) -> bool:
 @router.get("/chats")
 async def get_chats(login_session: str = Cookie(None), offset_date: str = None):
     
-    data = is_logged_in(login_session)
+    _, data = is_logged_in(login_session, False)
     client = data['client']
 
     if not client.is_connected():
@@ -115,7 +115,7 @@ async def get_chats(login_session: str = Cookie(None), offset_date: str = None):
 
 @router.get("/chats/{chat_id}/limit/{limit}/start/{start}")
 async def get_chat_messages(chat_id: int, limit: int, start: int, login_session: str = Cookie(None)):
-    temp_id, data = resolve_login_session(login_session)
+    temp_id, data = is_logged_in(login_session, False)
     if data.get('active_chat_id') != chat_id:
         data['ids_'] = set()
         data['active_chat_id'] = chat_id
@@ -923,7 +923,7 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
 
 @router.get("/chats/{chat_id}/inits")
 async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
-    data = is_logged_in(login_session)
+    _, data = is_logged_in(login_session, True)
     client = data['client']
     chat_id_cif = hashlib.sha256(pepper.encode() + str(chat_id).encode()).hexdigest()
     username = hashlib.sha256(pepper.encode() + data['data']['username'].encode()).hexdigest()
@@ -1116,7 +1116,7 @@ async def download_media(chat_id: int, message_id: int, login_session: str = Coo
     from fastapi.responses import StreamingResponse
     import io
     
-    data = is_logged_in(login_session)
+    _, data = is_logged_in(login_session, False)
     client = data['client']
     
     if not client.is_connected():
@@ -1173,7 +1173,7 @@ async def download_media(chat_id: int, message_id: int, login_session: str = Coo
     
 @router.get("/media/cifrato/download/{chat_id}/{message_id}")
 async def download_encrypt_media(chat_id: int, message_id: int, login_session: str = Cookie(None)):
-    data = is_logged_in(login_session)
+    _, data = is_logged_in(login_session, True)
     client = data['client']
     
     if not client.is_connected():

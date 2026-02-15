@@ -20,27 +20,6 @@ MESSAGE_LIMIT = 4096
 
 login_cache = {}
 
-def resolve_login_session(login_session: str):
-    if not login_session:
-        raise HTTPException(status_code=401, detail="Sessione mancante. Effettua il login.")
-    try:
-        temp_id = cipher.decrypt(login_session.encode()).decode()
-    except Exception:
-        raise HTTPException(status_code=401, detail="Sessione non valida. Riesegui il login.")
-
-    user_data = login_cache.get(temp_id)
-    if not user_data:
-        raise HTTPException(status_code=401, detail="Sessione scaduta. Riesegui il login.")
-
-    current_time = time.time()
-    if current_time - user_data['time'] > 1200:
-        login_cache.pop(temp_id, None)
-        raise HTTPException(status_code=401, detail="Sessione scaduta. riesegui il login")
-
-    user_data['time'] = time.time()
-    return temp_id, user_data
-
-
 def get_user_data_by_temp_id(temp_id: str):
     return login_cache.get(temp_id)
 
@@ -109,7 +88,7 @@ def genera_chiavi():
         print("Errore: age-keygen non è installato. Usa 'sudo apt install age'")
         return None, None
     
-def is_logged_in(login_session: str = Cookie(None)):
+def is_logged_in( login_session: str = Cookie(None), set_time: bool = False):
     global login_cache
     if not login_session:
         raise HTTPException(status_code=401, detail="Sessione mancante. Effettua il login.")
@@ -125,18 +104,18 @@ def is_logged_in(login_session: str = Cookie(None)):
     current_time = time.time()
 
     if current_time - user_data['time'] > 1200:
-        del login_cache[login_session]
-        raise HTTPException(status_code=401, detail="Sessione scaduta. riesegui il login")
-
-    user_data['time'] = time.time()
-    return user_data    
+        del login_cache[temp_id]
+        raise HTTPException(status_code=401, detail="Sessione scaduta. Riesegui il login.")
+    
+    if set_time:
+        user_data['time'] = current_time
+    return temp_id, user_data    
 
 def is_valid_age_public_key(key: str):
     pattern = r"^age1[0-9a-z]{58}$"
     if re.match(pattern, key):
         return True
     return False
-
 
 def store_public_key_in_vault(
     user_data,

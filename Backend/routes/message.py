@@ -54,7 +54,7 @@ async def wait_for_public_key_message(client, chat_id: int, public_key: str, tim
     
 @router.post("/messages/delete")
 async def delete(message: delete_m, login_session: str = Cookie(None)):
-    data = is_logged_in(login_session)
+    _, data = is_logged_in(login_session, True)
     client = data['client']
 
     if not client.is_connected():
@@ -70,7 +70,7 @@ async def delete(message: delete_m, login_session: str = Cookie(None)):
 
 @router.post("/messages/send/file")
 async def s_file(chat_id: int = Form(...), text: str = Form(""), cryph: bool = Form(False),group: bool = Form(False), file: UploadFile = File(...),login_session: str = Cookie(None)):
-    data = is_logged_in(login_session)
+    _, data = is_logged_in(login_session, True)
     client = data['client']
 
 
@@ -202,7 +202,7 @@ async def s_file(chat_id: int = Form(...), text: str = Form(""), cryph: bool = F
         
 @router.post("/messages/send")
 async def s_message( credentials: message, login_session: str = Cookie(None)):
-    data = is_logged_in(login_session)
+    _, data = is_logged_in(login_session, True)
     client = data['client']
 
     if not client.is_connected():
@@ -323,7 +323,7 @@ async def s_message( credentials: message, login_session: str = Cookie(None)):
 
 @router.post("/messages/initializing")
 async def send_public_key(credentials: iniz, login_session: str = Cookie(None)):
-    data = is_logged_in(login_session)
+    _, data = is_logged_in(login_session, True)
     client = data['client']
 
     if not client.is_connected():
