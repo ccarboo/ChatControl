@@ -34,7 +34,7 @@ async def chat_events(websocket: WebSocket, chat_id: int):
     if not client.is_connected():
         await client.connect()
 
-    register_telethon_handlers(client, temp_id)
+    register_telethon_handlers(client, temp_id, login_session)
     await connect_socket(temp_id, chat_id, websocket)
     try:
         while True:

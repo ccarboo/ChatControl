@@ -48,10 +48,12 @@
 
               ws.onmessage = (event) => {
                 try {
+                  console.log("[WS] Messaggio ricevuto raw:", event.data)
                   const payload = JSON.parse(event.data)
+                  console.log("[WS] Payload parsed:", payload)
                   this.handleChatEvent(payload)
                 } catch (e) {
-                  console.error('Errore parsing evento WS:', e)
+                  console.error('[WS] Errore parsing evento WS:', e)
                 }
               }
 
@@ -74,18 +76,45 @@
               }
             },
             handleChatEvent(payload) {
-              if (!payload || !this.selectedChat) return
-              if (payload.chat_id !== this.selectedChat.id) return
-              if (payload.event_type === 'new' && this.isEncryptedPayload(payload.message)) {
-                this.queueRealtimeReload({ start: 0, limit: 1 })
+              console.log("[WS] handleChatEvent chiamato con:", payload)
+              if (!payload || !this.selectedChat) {
+                console.log("[WS] handleChatEvent: payload o selectedChat mancante")
                 return
               }
+              if (payload.chat_id !== this.selectedChat.id) {
+                console.log(`[WS] handleChatEvent: chat_id mismatch (payload: ${payload.chat_id}, selected: ${this.selectedChat.id})`)
+                return
+              }
+              if (payload.event_type === 'new') {
+                console.log("[WS] handleChatEvent: event_type 'new'")
+                const message = payload.message
+                if (!message || !message.id) {
+                  console.log("[WS] handleChatEvent: message o id mancante")
+                  return false
+                }
+
+                if (!message.chat_id) {
+                  message.chat_id = payload.chat_id
+                }
+
+                const index = this.messaggi.findIndex((m) => m.id === message.id)
+                if (index === -1) {
+                  this.messaggi = [...this.messaggi, message]
+                  return true
+                }
+
+                const current = this.messaggi[index]
+                this.messaggi.splice(index, 1, { ...current, ...message })
+                return true
+              }
               if (payload.event_type === 'edited') {
+                console.log("[WS] handleChatEvent: event_type 'edited'")
                 this.reloadEditedMessage(payload)
                 return
               }
               const changed = this.applyChatEvent(payload)
               if (!changed) {
+                console.log("[WS] handleChatEvent: nessun cambiamento, queueRealtimeReload")
                 this.queueRealtimeReload()
                 return
               }

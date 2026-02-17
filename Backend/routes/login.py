@@ -64,7 +64,6 @@ async def login_user(credentials: login_user, response: Response):
 
     #se la sessione del client era attiva
     if await client.is_user_authorized():
-        register_telethon_handlers(client, temp_id)
         pass
 
     #altrimenti ne crea un'altra
@@ -117,7 +116,6 @@ async def login_user_expired(credentials: code, login_session: str = Cookie(None
         except Exception as e:
             raise HTTPException(status_code=401, detail=str(e))
     temp_data['data']['session'] = session_str
-    register_telethon_handlers(client, temp_id)
 
     vault_ciphered = cifra_vault(temp_data['data'], temp_data['data']['masterkey'])
     username = hashlib.sha256(pepper.encode() + temp_data['data']['username'].encode()).hexdigest()
