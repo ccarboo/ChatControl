@@ -12,7 +12,7 @@ from telethon.tl.types import (
 )
 from config import pepper
 from database.sqlite import get_connection
-from utils import cifra_vault, decifra_vault, get_user_data_by_temp_id, is_valid_age_public_key, store_public_key_in_vault
+from utils import cifra_vault, decifra_vault, get_user_data_by_temp_id, is_valid_age_public_key, store_public_key_in_vault, set_media
 
 # temp_id -> chat_id -> set[WebSocket]
 _active_connections = {}
@@ -146,44 +146,8 @@ def _serialize_message(msg):
         "out": msg.out,
         "reply_to": msg.reply_to.reply_to_msg_id if msg.reply_to else None,
     }
-
     if msg.media:
-        data["file"] = True
-
-        if msg.sticker:
-            document = msg.sticker
-            is_animated = any(
-                isinstance(attr, DocumentAttributeAnimated)
-                for attr in (document.attributes or [])
-            )
-            mime = document.mime_type or "image/webp"
-            if is_animated or mime in ("application/x-tgsticker", "video/webm"):
-                data["media_type"] = "sticker_animated"
-            else:
-                data["media_type"] = "sticker"
-            data["size"] = document.size
-            data["mime"] = mime
-        elif msg.gif:
-            data["media_type"] = "gif"
-            data["size"] = msg.gif.size
-            data["mime"] = msg.gif.mime_type or "video/mp4"
-        elif msg.document:
-            document = msg.document
-            data["media_type"] = "document"
-            data["filename"] = None
-            data["mime"] = document.mime_type or "application/octet-stream"
-            data["size"] = document.size or 0
-            for attr in (document.attributes or []):
-                if hasattr(attr, "file_name"):
-                    data["filename"] = attr.file_name
-                    break
-        elif msg.photo:
-            data["media_type"] = "photo"
-            data["size"] = msg.photo.size if hasattr(msg.photo, "size") else 0
-        elif msg.video:
-            data["media_type"] = "video"
-            data["size"] = msg.video.size if hasattr(msg.video, "size") else 0
-            data["mime"] = msg.video.mime_type if hasattr(msg.video, "mime_type") else "video/mp4"
+        set_media(msg, data)
 
     return data
 
