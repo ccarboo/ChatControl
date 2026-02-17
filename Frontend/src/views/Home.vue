@@ -123,6 +123,7 @@
               }
             },
             applyChatEvent(payload) {
+              console.log("el dio cane")
               const type = payload.event_type
               if (type === 'deleted') {
                 const ids = Array.isArray(payload.message_ids) ? payload.message_ids : []
@@ -858,15 +859,28 @@
                v-for="m in messaggi" 
                :key="m.id" 
                class="message-wrapper"
-               :class="{ 'message-out': m.out, 'message-in': !m.out, 'message-system': !!m.chiave }"
+               :class="{ 'message-out': m.out, 'message-in': !m.out, 'message-system': !!m.chiave, 'message-system-type': !!m.system_type}"
                @contextmenu.prevent="openMessageMenu($event, m)"
                @touchstart="handleMessageTouchStart($event, m)"
                @touchmove="handleMessageTouchMove($event)"
                @touchend="handleMessageTouchEnd"
                @touchcancel="handleMessageTouchEnd"
              >
-               <div class="message-bubble" :class="{ 'message-error': m.error, 'message-system-bubble': !!m.chiave }">
-                 <div v-if="!m.chiave" class="message-header">
+               <div 
+                 class="message-bubble"
+                 :class="{
+                   'message-error': m.error,
+                   'message-system-bubble': !!m.chiave,
+                   'message-system-type-bubble': !!m.system_type
+                 }"
+               >
+                 <template v-if="m.system_type">
+                   <div class="message-system-content">
+                     <span class="message-system-label">{{ m.system_type }}</span>
+                   </div>
+                 </template>
+                 <template v-else>
+                   <div v-if="!m.chiave" class="message-header">
                    <span class="message-sender">
                      {{ m.out ? 'Tu' : (m.sender_username || m.sender_id) }}
                    </span>
@@ -949,6 +963,7 @@
                  <div class="message-time">
                    {{ new Date(m.date).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }) }}
                  </div>
+                 </template>
                </div> 
              </div>
              <div v-if="contextMenuVisible" class="message-context-backdrop" @click="closeMessageMenu"></div>
@@ -1035,6 +1050,22 @@
 </template>
 
 <style scoped>
+/* Messaggi con system_type centrati e colorati */
+.message-wrapper.message-system-type {
+  justify-content: center !important;
+  align-items: center;
+}
+
+.message-system-type-bubble {
+  max-width: 60%;
+  background-color: #ffe9b3;
+  color: #7a4c00;
+  border: 2px solid #ffd166;
+  border-radius: 24px;
+  box-shadow: 0 2px 8px rgba(255, 209, 102, 0.15);
+  margin: 0 auto;
+  font-weight: 600;
+}
 .vh-100 { height: 100vh; overflow: hidden; }
 
 

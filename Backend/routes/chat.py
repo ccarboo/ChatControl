@@ -6,7 +6,7 @@ from config import pepper
 import hashlib
 from utils import cifra_vault, is_logged_in, is_valid_age_public_key, store_public_key_in_vault, is_group_chat_id, decifra_file_con_age, build_candidate_privates, set_media
 from realtime import connect_socket, disconnect_socket, register_telethon_handlers, index_messages
-from telethon.tl.types import DocumentAttributeAnimated
+from telethon.tl.types import MessageService, MessageActionChatCreate, MessageActionChatDeleteUser, MessageActionChatAddUser, MessageActionPinMessage
 from datetime import datetime, timedelta
 import json
 import base64
@@ -142,6 +142,45 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
         iter_kwargs["add_offset"] = add_offset
     async for msg in client.iter_messages(entity, **iter_kwargs):
         sender = await msg.get_sender()
+        system_message = None
+        if isinstance(msg, MessageService):
+            action = msg.action
+            if isinstance(action, MessageActionChatCreate):
+                system_message = f"Gruppo creato: {action.title}"
+            elif isinstance(action, MessageActionChatDeleteUser):
+                left_user = getattr(action, 'user_id', None)
+                left_user_name = None
+                if left_user:
+                    try:
+                        left_user_entity = await client.get_entity(left_user)
+                        left_user_name = getattr(left_user_entity, 'username', None) or getattr(left_user_entity, 'first_name', None) or str(left_user)
+                    except Exception:
+                        left_user_name = str(left_user)
+                if left_user_name:
+                    system_message = f"{left_user_name} ha lasciato il gruppo"
+                else:
+                    system_message = "Un utente ha lasciato il gruppo"
+            elif isinstance(action, MessageActionChatAddUser):
+                added_users = getattr(action, 'users', None)
+                if added_users and isinstance(added_users, list):
+                    names = []
+                    for user_id in added_users:
+                        try:
+                            user_entity = await client.get_entity(user_id)
+                            name = getattr(user_entity, 'username', None) or getattr(user_entity, 'first_name', None) or str(user_id)
+                        except Exception:
+                            name = str(user_id)
+                        names.append(name)
+                    users_str = ", ".join(names)
+                    system_message = f"{users_str} è entrato nel gruppo"
+                else:
+                    system_message = "Un utente è entrato nel gruppo"
+            elif isinstance(action, MessageActionPinMessage):
+                system_message = f"Un messaggio è stato pinnato nella chat(id: {msg.id})"
+
+            else:
+                system_message = "Notifica di sistema"
+
         message_data = {
             'id': msg.id,
             'chat_id': chat_id,
@@ -151,6 +190,7 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
             'sender_username': getattr(sender, 'username', None) if sender else None,
             'out': msg.out,
             'reply_to': msg.reply_to.reply_to_msg_id if msg.reply_to else None,
+            'system_type': system_message,
         }
         
         # Estrai dati del media se presente
@@ -160,8 +200,6 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
         messages.append(message_data)
 
     await index_messages(temp_id, chat_id, [m.get("id") for m in messages if m.get("id") is not None])
-
-     
 
     # Calcola la "window" in funzione del tempo di download
     # dei file cifrati presenti nella pagina, partendo dal
@@ -312,7 +350,9 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
 
 
     for message in messages:
-        
+        if message['system_type']:
+            continue
+
         text = message.get('text') or ''
         try:
             parsed = json.loads(text)
@@ -562,10 +602,10 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
                             elif fine is not None and inizio <= timestamp_unix <= fine:
                                 chiave_stimata = chiave_storica
                                 break
-                    
+
                     if chiave_stimata and chiave_stimata.get('privata'):
                         candidate_privates.append(chiave_stimata.get('privata'))
-                    
+
                     if chiavi_storiche_sorted:
                         chiave_precedente = chiavi_storiche_sorted[0]
                         if chiave_precedente.get('privata') and chiave_precedente.get('privata') != (chiave_stimata.get('privata') if chiave_stimata else None):
@@ -1126,4 +1166,3 @@ async def download_encrypt_media(chat_id: int, message_id: int, login_session: s
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=502, detail=f"Errore download: {str(e)}")
-    

@@ -141,7 +141,6 @@ async def resolve_chat_id_for_deleted(temp_id: str, message_ids: list[int]) -> i
 
 
 def _serialize_message(msg):
-
     message_data = {
         "id": msg.id,
         "chat_id": msg.chat_id,
@@ -190,7 +189,11 @@ async def broadcast_event(temp_id: str, chat_id: int, payload: dict):
     dead = []
     for ws in sockets:
         try:
-            payload['message']['date']= payload['message']['date'].isoformat()
+     
+            if payload.get('message') and payload.get('message').get('date'):
+                payload['message']['date']= payload['message']['date'].isoformat()
+        
+                
             await ws.send_json(payload)
         except Exception as e:
             dead.append(ws)
@@ -212,6 +215,9 @@ def register_telethon_handlers(client, temp_id: str, login_session: str):
         me = await client.get_me()
         my_id = me.id if me else None
         message_data = _serialize_message(event.message)
+
+        sender = await event.message.get_sender()
+        message_data['sender_username'] = getattr(sender, 'username', None) if sender else None
         chat_id_cif = hashlib.sha256(pepper.encode() + str(event.chat_id).encode()).hexdigest()
 
         if not event.chat_id:
@@ -734,13 +740,10 @@ def register_telethon_handlers(client, temp_id: str, login_session: str):
             "chat_id": event.chat_id,
             "message": message_data,
         }
-        print(payload)
         await broadcast_event(temp_id, event.chat_id, payload)
 
     async def handle_edited_message(event):
-        print("[DEBUG] handle_edited_message called", event)
         if not event.chat_id:
-            print("[DEBUG] No chat_id in event")
             return
         if event.message and event.message.id:
             await index_messages(temp_id, event.chat_id, [event.message.id])
@@ -750,10 +753,10 @@ def register_telethon_handlers(client, temp_id: str, login_session: str):
             "chat_id": event.chat_id,
             "message": message_data,
         }
-        print(f"[DEBUG] Broadcasting edited event: {payload}")
         await broadcast_event(temp_id, event.chat_id, payload)
 
     async def handle_deleted_message(event):
+        print("deleted handled")
         message_ids = list(event.deleted_ids or [])
         if not message_ids:
             return
@@ -770,11 +773,13 @@ def register_telethon_handlers(client, temp_id: str, login_session: str):
         if not chat_id:
             return
         await drop_message_ids(temp_id, chat_id, message_ids)
+        
         payload = {
             "event_type": "deleted",
             "chat_id": chat_id,
             "message_ids": message_ids,
         }
+        print(payload)
         await broadcast_event(temp_id, chat_id, payload)
 
     async def handle_raw_update(event):
