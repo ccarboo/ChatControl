@@ -139,6 +139,7 @@ import api from '@/services/api'
                         <div class="input-group">
                             <select class="form-select" v-model="phone_prefix" aria-label="prefisso telefonico">
                                 <option value="+39">+39 Italia</option>
+                                <option value="+20">+20 egitto</option>
                                 <option value="+66">+66 Thailandia</option>
                                 <option value="+44">+44 Regno Unito</option>
                                 <option value="+49">+49 Germania</option>

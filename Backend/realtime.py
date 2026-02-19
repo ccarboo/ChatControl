@@ -5,15 +5,13 @@ import tempfile
 import hashlib
 import sqlite3
 import json
-from fastapi import WebSocket, HTTPException
+from fastapi import WebSocket
 from telethon import events, utils
 from telethon.tl.types import (
-    DocumentAttributeAnimated,
     PeerChannel,
     UpdateDeleteChannelMessages,
     UpdateDeleteMessages,
 )
-from datetime import datetime, timedelta
 from config import pepper
 from database.sqlite import get_connection
 from utils import cifra_vault, decifra_vault, get_user_data_by_temp_id, is_valid_age_public_key, store_public_key_in_vault, set_media, is_logged_in
@@ -254,6 +252,7 @@ def register_telethon_handlers(client, temp_id: str, login_session: str):
                             "message": message_data,
                         }
                         await broadcast_event(temp_id, event.chat_id, payload)
+                        return
 
                     pubblic = parsed.get("public")
                     if pubblic and is_valid_age_public_key(pubblic):
@@ -403,6 +402,7 @@ def register_telethon_handlers(client, temp_id: str, login_session: str):
                                         "message": message_data,
                                     }
                                     await broadcast_event(temp_id, event.chat_id, payload)
+                                    return
                             
                                 elif  id_message_decifrato_caption != id_message_decifrato :
                                     message_data['error'] = "questo messaggio e' stato modificato"
@@ -415,6 +415,7 @@ def register_telethon_handlers(client, temp_id: str, login_session: str):
                                         "message": message_data,
                                     }
                                     await broadcast_event(temp_id, event.chat_id, payload)
+                                    return
                                 message_data['text'] = dizionario['text']
                                 message_data['secure'] = True
                                 data['ids_'].add(id_message_decifrato_caption)
@@ -443,6 +444,7 @@ def register_telethon_handlers(client, temp_id: str, login_session: str):
                                         "message": message_data,
                                     }
                             await broadcast_event(temp_id, event.chat_id, payload)
+                            return
 
                         full_message = await client.get_messages(entity, ids=message_id)
                         if not full_message or not full_message.media or not full_message.document:
@@ -453,6 +455,7 @@ def register_telethon_handlers(client, temp_id: str, login_session: str):
                                         "message": message_data,
                                     }
                             await broadcast_event(temp_id, event.chat_id, payload)
+                            return
 
                         import io
                         file_bytes = io.BytesIO()
@@ -563,6 +566,7 @@ def register_telethon_handlers(client, temp_id: str, login_session: str):
                                                     "message": message_data,
                                                 }
                                         await broadcast_event(temp_id, event.chat_id, payload)
+                                        return
 
                                     message_data['text'] = message_bytes.decode('utf-8', errors='replace')
                                     data['ids_'].add(id_message_decifrato)
@@ -714,6 +718,7 @@ def register_telethon_handlers(client, temp_id: str, login_session: str):
                                                     "message": message_data,
                                                 }
                                     await broadcast_event(temp_id, event.chat_id, payload)
+                                    return
                                 
                                 message_data['file'] = True
                                 message_data['filename'] = dizionario['filename']
@@ -741,6 +746,7 @@ def register_telethon_handlers(client, temp_id: str, login_session: str):
             "message": message_data,
         }
         await broadcast_event(temp_id, event.chat_id, payload)
+        return
 
     async def handle_edited_message(event):
         if not event.chat_id:

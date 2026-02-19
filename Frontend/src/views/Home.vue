@@ -461,6 +461,8 @@
               if (!this.selectedChat) {
                 return
               }
+              if (this.loading || !this.text.trim()) return;
+
               this.loading = true
               if (!this.file && this.text.trim().length !== 0){
                 try {
