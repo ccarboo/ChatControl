@@ -41,8 +41,11 @@ signup_cache = {}
 async def create_user(credentials: UserData, response: Response):
     client = TelegramClient(StringSession(), credentials.api_id, credentials.api_hash)
     await client.connect()
-
-    sent_code = await client.send_code_request(credentials.phone)
+    try:
+        sent_code = await client.send_code_request(credentials.phone)
+    except Exception as e:
+        print(f"ERRORE TELEGRAM: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Errore Telegram: {str(e)}")
     temp_id = secrets.token_hex(16)
     salt = secrets.token_bytes(16)
     username = hashlib.sha256(pepper.encode() + credentials.username.encode()).hexdigest()

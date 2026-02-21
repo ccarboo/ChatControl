@@ -13,7 +13,8 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://localhost:5173", 
+        "https://localhost:5173",
+        "https://127.0.0.1:5173",
         "https://192.168.1.228:5173",
         "https://server.apernici.it",
         "https://apernici.it",
