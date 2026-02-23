@@ -76,10 +76,19 @@ def cifra_con_age(plaintext: str | bytes, public_keys: list):
 def decifra_file_con_age(ciphertext, candidate_privates):
     for privata in candidate_privates:
         try:
-            try:
-                input_bytes = base64.b64decode(ciphertext)
-            except Exception:
-                input_bytes = ciphertext if isinstance(ciphertext, (bytes, bytearray)) else str(ciphertext).encode()
+            input_bytes = None
+            if isinstance(ciphertext, str):
+                try:
+                    input_bytes = base64.b64decode(ciphertext, validate=True)
+                except Exception:
+                    input_bytes = ciphertext.encode()
+            elif isinstance(ciphertext, (bytes, bytearray)):
+                try:
+                    input_bytes = base64.b64decode(ciphertext, validate=True)
+                except Exception:
+                    input_bytes = ciphertext
+            else:
+                input_bytes = str(ciphertext).encode()
 
             with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
                 keyfile.write(privata)
