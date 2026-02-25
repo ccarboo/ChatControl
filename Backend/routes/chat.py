@@ -13,10 +13,12 @@ import subprocess
 import tempfile
 
 from config import pepper
-from utils import (
-    cifra_vault, is_logged_in, is_valid_age_public_key, store_public_key_in_vault,
-    is_group_chat_id, decifra_file_con_age, build_candidate_privates, set_media
+from services.crypto_service import (
+    cifra_vault, is_valid_age_public_key, store_public_key_in_vault,
+    decifra_file_con_age, build_candidate_privates
 )
+from services.auth_service import is_logged_in
+from services.telegram_service import is_group_chat_id, set_media
 from realtime import connect_socket, disconnect_socket, register_telethon_handlers, index_messages
 from database.sqlite import get_connection
 from databaseInteractions import get_gruppo_vault, get_chat_vault
@@ -29,9 +31,7 @@ router = APIRouter()
 
 @router.websocket("/ws/chats/{chat_id}")
 async def chat_events(websocket: WebSocket, chat_id: int):
-    """
-    Endpoint WebSocket per eventi in tempo reale di una determinata chat.
-    """
+    """Endpoint WebSocket per eventi in tempo reale della chat."""
     login_session = websocket.cookies.get("login_session")
     try:
         temp_id, data = is_logged_in(login_session, False)
@@ -57,10 +57,7 @@ async def chat_events(websocket: WebSocket, chat_id: int):
 
 @router.get("/chats")
 async def get_chats(login_session: str = Cookie(None), offset_date: str = None):
-    """
-    Recupera l'elenco delle chat (dialogs) disponibili per l'utente,
-    con annotazione per indicare se sono protette (cifrate).
-    """
+    """Recupera l'elenco delle chat con flag cifratura."""
     _, data = is_logged_in(login_session, False)
     client = data['client']
 
@@ -197,9 +194,7 @@ def _calculate_time_window(messages: list) -> tuple[datetime | None, datetime | 
     return window_start, window_end
 
 def _populate_decrypted_ids(messages_in_window: list, data: dict, chat_keys: dict):
-    """
-    Indaga sui messaggi storici della finestra per precalcolare gli `ids_` di replay mitigation.
-    """
+    """Indaga sui vecchi messaggi per precalcolare gli ID ed evitare replay attack."""
     for message in messages_in_window:
         text = message.get('text') or ''
         try:
@@ -225,7 +220,7 @@ def _populate_decrypted_ids(messages_in_window: list, data: dict, chat_keys: dic
             pass
 
 def _handle_key_exchange(message: dict, entity, chat_id: int, data: dict, my_id: int):
-    """Recupera le chiavi pubbliche del destinatario presentate in chiaro come setup."""
+    """Recupera le chiavi pubbliche in chiaro impostate come setup di chat cifrata."""
     if my_id and message.get('sender_id') == my_id:
         message.update({
             'is_json': False, 'text': None, 
@@ -248,7 +243,7 @@ def _handle_key_exchange(message: dict, entity, chat_id: int, data: dict, my_id:
     })
 
 def _handle_encrypted_text(message: dict, data: dict, chat_keys: dict):
-    """Decifra stringhe di testo cifrate nel payload on standard."""
+    """Decifra stringhe testuali e valida autenticità anti-replay/alterazione."""
     text_enc = message['json'].get('text')
     timestamp = message.get('date')
     id_enc = message['json'].get('id')
@@ -287,7 +282,7 @@ def _handle_encrypted_text(message: dict, data: dict, chat_keys: dict):
     message.pop('json', None)
 
 async def _handle_encrypted_file(message: dict, client, entity, data: dict, chat_keys: dict):
-    """Effettua download leggero (chunk iniziale) per estrapolare e decifrare gli header dei media criptati."""
+    """Estrapola e verifica header cifrati su download media parziale."""
     msg_id = message.get('id')
     header_encrypted_metadata = None
 
@@ -355,7 +350,7 @@ async def _handle_encrypted_file(message: dict, client, entity, data: dict, chat
     message.pop('json', None)
 
 async def _handle_encrypted_document_payload(message: dict, client, entity, data: dict, chat_keys: dict):
-    """Gestisce il caso in cui testo molto grande è stato convertito in file (cif: message)."""
+    """Decodifica un messaggio testuale trasportato come payload documentale binario."""
     msg_id = message.get('id')
     if not msg_id: return
 
@@ -403,10 +398,7 @@ async def _handle_encrypted_document_payload(message: dict, client, entity, data
 
 @router.get("/chats/{chat_id}/limit/{limit}/start/{start}")
 async def get_chat_messages(chat_id: int, limit: int, start: int, login_session: str = Cookie(None)):
-    """
-    Raccoglie i `limit` messaggi di una chat con l'offset indicato da `start`.
-    Attraverso le funzioni helper, smista e decodifica i payload cifrati applicando security verification.
-    """
+    """Raccoglie messaggi smistando i payload cifrati con security validation."""
     temp_id, data = is_logged_in(login_session, False)
     if data.get('active_chat_id') != chat_id:
         data['ids_'] = set()
@@ -501,10 +493,7 @@ async def get_chat_messages(chat_id: int, limit: int, start: int, login_session:
 
 @router.get("/chats/{chat_id}/inits")
 async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
-    """
-    Sonda la chat storicamente alla ricerca di chiavi pubbliche rilasciate come messaggi.
-    Se ne incontra di valide le memorizza localmente nel vault e sincronizza con il database.
-    """
+    """Sonda messaggi di init per aggiornare le variazioni del vault e keys."""
     _, data = is_logged_in(login_session, True)
     client = data['client']
     chat_id_cif = hashlib.sha256(pepper.encode() + str(chat_id).encode()).hexdigest()
@@ -629,7 +618,7 @@ async def get_init_messages(chat_id: int, login_session: str = Cookie(None)):
 
 @router.get("/media/download/{chat_id}/{message_id}")
 async def download_media(chat_id: int, message_id: int, login_session: str = Cookie(None)):
-    """Avvia lo streaming/download per file standard non cifrati."""
+    """Streaming efficiente per file multimediali standard."""
     _, data = is_logged_in(login_session, False)
     client = data['client']
     
@@ -666,7 +655,7 @@ async def download_media(chat_id: int, message_id: int, login_session: str = Coo
     
 @router.get("/media/cifrato/download/{chat_id}/{message_id}")
 async def download_encrypt_media(chat_id: int, message_id: int, login_session: str = Cookie(None)):
-    """Effettua il download e la decrittografia via age di file multimediali offuscati inviati come payload binari."""
+    """Decifra on-the-fly un file offuscato con age e lo streama al client."""
     _, data = is_logged_in(login_session, True)
     client = data['client']
     

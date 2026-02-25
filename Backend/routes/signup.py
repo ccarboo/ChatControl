@@ -12,7 +12,8 @@ from telethon.errors import SessionPasswordNeededError
 
 from database.sqlite import get_connection
 from config import pepper, secret_key
-from utils import deriva_master_key, cifra_vault, login_cache
+from services.crypto_service import deriva_master_key, cifra_vault
+from services.auth_service import login_cache
 from realtime import register_telethon_handlers
 from databaseInteractions import check_username_unicity
 
@@ -35,11 +36,7 @@ class Signup2FA(BaseModel):
     password: str
 
 def _build_and_store_vault(temp_data: dict, session_str: str, response: Response, client: TelegramClient, password_2fa: str | None = None):
-    """
-    Helper interno per consolidare i dati raccolti durante la Signup.
-    Crea la struttura da cifrare (Master Vault), la inserisce nel database e
-    popola la login_cache preparandosi a switchare cookie da `signup` a `login`.
-    """
+    """Crea la struttura da cifrare (Master Vault), la inserisce nel DB e popola la cache."""
     masterkey_str = temp_data['masterkey_derived'].decode() if isinstance(temp_data['masterkey_derived'], bytes) else temp_data['masterkey_derived']
     
     da_cifrare = {
@@ -87,10 +84,7 @@ def _build_and_store_vault(temp_data: dict, session_str: str, response: Response
 
 @router.post("/signup/step1")
 async def create_user(credentials: UserData, response: Response):
-    """
-    Fase 1 del Signup: Contatta Telegram invocando l'SMS e alloca un token TLS RAM provvisorio
-    contenente i metadati (API credenziali, derive hash masterkey).
-    """
+    """Fase 1 Signup: invia codice SMS tramite Telegram e inizializza cache."""
     client = TelegramClient(StringSession(), credentials.api_id, credentials.api_hash)
     await client.connect()
     
@@ -133,10 +127,7 @@ async def create_user(credentials: UserData, response: Response):
      
 @router.post("/signup/step2")
 async def sign_up_verify(credentials: SignupCode, signup_session: str = Cookie(None), response: Response = None):
-    """
-    Fase 2 del Signup: Valida il codice SMS. Se manca la 2FA finalizza istantaneamente 
-    (delegando il salvataggio a `_build_and_store_vault`), altrimenti informa il front-end per step 3.
-    """
+    """Fase 2 Signup: valida codice SMS e finalizza se non serve 2FA."""
     if not signup_session:
         raise HTTPException(status_code=400, detail="Sessione non trovata")
     
@@ -163,9 +154,7 @@ async def sign_up_verify(credentials: SignupCode, signup_session: str = Cookie(N
 
 @router.post("/signup/step3")
 async def sign_up_verify_password(credentials: Signup2FA, signup_session: str = Cookie(None), response: Response = None):
-    """
-    Fase 3 opzionale del Signup: Risolve le istanze coperte da Cloud Password (2FA) di Telegram e finalizza.
-    """
+    """Fase 3 Signup: completa la registrazione tramite cloud password 2FA."""
     if not signup_session:
         raise HTTPException(status_code=400, detail="Sessione non trovata")
     

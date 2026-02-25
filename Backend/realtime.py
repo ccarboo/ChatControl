@@ -1,14 +1,6 @@
-import asyncio
-import base64
-import subprocess
-import tempfile
 import hashlib
 import sqlite3
 import json
-import io
-import os
-import traceback
-from fastapi import WebSocket
 from telethon import events, utils
 from telethon.tl.types import (
     PeerChannel,
@@ -17,41 +9,30 @@ from telethon.tl.types import (
 )
 from config import pepper
 from database.sqlite import get_connection
-from utils import (
-    cifra_vault, decifra_vault, get_user_data_by_temp_id,
-    is_valid_age_public_key, store_public_key_in_vault, set_media, is_logged_in,
-    build_candidate_privates, decifra_file_con_age
+from services.crypto_service import cifra_vault, decifra_vault
+from services.auth_service import get_user_data_by_temp_id, is_logged_in
+from services.telegram_service import is_group_chat_id, set_media
+
+from websocket.connection_manager import (
+    connect_socket, disconnect_socket, broadcast_event, 
+    index_messages, drop_message_ids, resolve_chat_id_for_deleted
+)
+from websocket.message_processors import (
+    _process_key_exchange, _process_text_message,
+    _process_document_payload, _process_encrypted_file
 )
 
-# temp_id -> chat_id -> set[WebSocket]
-_active_connections = {}
-_connections_lock = asyncio.Lock()
-
-# temp_id -> chat_id -> {"ids": set[int], "order": list[int]}
-_message_index = {}
-_message_index_lock = asyncio.Lock()
-_MAX_INDEX_PER_CHAT = 3000
-
-def _is_group_chat_id(chat_id: int) -> bool:
-    try:
-        return int(chat_id) < 0
-    except Exception:
-        return False
-
 async def _remove_user_from_vault(temp_id: str, chat_id: int, user_id: int | None):
-    """
-    Rimuove l'utente dal vault segreto dei gruppi in caso venga kickato o abbandoni la chat.
-    Aggiorna lo stato dei contatti crittografati nel DB SQLite.
-    """
+    """Rimuove l'utente dal vault segreto del gruppo se esce o viene rimosso, aggiornando il DB."""
     user_data = get_user_data_by_temp_id(temp_id)
     if not user_data:
         return
-    if user_id is not None and not _is_group_chat_id(chat_id):
+    if user_id is not None and not is_group_chat_id(chat_id):
         if str(user_id) != str(chat_id):
             return
     username = hashlib.sha256(pepper.encode() + user_data['data']['username'].encode()).hexdigest()
     chat_id_cif = hashlib.sha256(pepper.encode() + str(chat_id).encode()).hexdigest()
-    is_group = _is_group_chat_id(chat_id)
+    is_group = is_group_chat_id(chat_id)
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -83,70 +64,8 @@ async def _remove_user_from_vault(temp_id: str, chat_id: int, user_id: int | Non
     except sqlite3.Error as error:
         print(f"ERROR remove_user_from_vault: {error}")
 
-async def index_messages(temp_id: str, chat_id: int, message_ids: list[int]):
-    """
-    Crea un indice temporaneo per mappare ID dei messaggi alle rispettive chat, 
-    utile per risolvere l'origine dei raw events di Telethon di eliminazione ai quali manca la chat_id.
-    """
-    if not message_ids:
-        return
-    async with _message_index_lock:
-        user_map = _message_index.setdefault(temp_id, {})
-        chat_map = user_map.setdefault(chat_id, {"ids": set(), "order": []})
-        ids_set = chat_map["ids"]
-        order = chat_map["order"]
-        for mid in message_ids:
-            if mid is None:
-                continue
-            if mid in ids_set:
-                continue
-            ids_set.add(mid)
-            order.append(mid)
-        if len(order) > _MAX_INDEX_PER_CHAT:
-            overflow = len(order) - _MAX_INDEX_PER_CHAT
-            for _ in range(overflow):
-                old = order.pop(0)
-                ids_set.discard(old)
-
-async def drop_message_ids(temp_id: str, chat_id: int, message_ids: list[int]):
-    """ Rimuovi i messaggi eliminati dall'indice per evitare memory leak. """
-    if not message_ids:
-        return
-    async with _message_index_lock:
-        user_map = _message_index.get(temp_id)
-        if not user_map:
-            return
-        chat_map = user_map.get(chat_id)
-        if not chat_map:
-            return
-        ids_set = chat_map["ids"]
-        order = chat_map["order"]
-        for mid in message_ids:
-            ids_set.discard(mid)
-        if order:
-            chat_map["order"] = [mid for mid in order if mid in ids_set]
-
-async def resolve_chat_id_for_deleted(temp_id: str, message_ids: list[int]) -> int | None:
-    """ Risolve e ritrova l'ID della chat per dei messaggi eliminati comparandoli con l'indice temporaneo. """
-    if not message_ids:
-        return None
-    async with _message_index_lock:
-        user_map = _message_index.get(temp_id)
-        if not user_map:
-            return None
-        ids = set(mid for mid in message_ids if mid is not None)
-        if not ids:
-            return None
-        candidates = []
-        for chat_id, chat_map in user_map.items():
-            if ids.issubset(chat_map["ids"]):
-                candidates.append(chat_id)
-        if len(candidates) == 1:
-            return candidates[0]
-        return None
-
 def _serialize_message(msg):
-    """ Converte il dizionario message nativo di Telethon a struct gestibile in Python """
+    """Converte il messaggio nativo di Telethon in un dizionario Python."""
     message_data = {
         "id": msg.id,
         "chat_id": msg.chat_id,
@@ -160,286 +79,9 @@ def _serialize_message(msg):
         set_media(msg, message_data)
     return message_data
 
-async def connect_socket(temp_id: str, chat_id: int, websocket: WebSocket):
-    """ Accetta una WebSocket e la memorizza. """
-    await websocket.accept()
-    async with _connections_lock:
-        user_map = _active_connections.setdefault(temp_id, {})
-        sockets = user_map.setdefault(chat_id, set())
-        sockets.add(websocket)
-
-async def disconnect_socket(temp_id: str, chat_id: int, websocket: WebSocket):
-    """ Interrompe e rimuove una instanza websocket """
-    async with _connections_lock:
-        user_map = _active_connections.get(temp_id)
-        if not user_map:
-            return
-        sockets = user_map.get(chat_id)
-        if not sockets:
-            return
-        sockets.discard(websocket)
-        if not sockets:
-            user_map.pop(chat_id, None)
-        if not user_map:
-            _active_connections.pop(temp_id, None)
-
-async def broadcast_event(temp_id: str, chat_id: int, payload: dict):
-    """
-    Invia asincronamente l'evento con il payload a tutti i websocket attivi su quella chat_id e utente (se l'utente ha più tab aperte).
-    """
-    async with _connections_lock:
-        sockets = list(_active_connections.get(temp_id, {}).get(chat_id, set()))
-    if not sockets:
-        return
-    dead = []
-    for ws in sockets:
-        try:
-            if payload.get('message') and payload.get('message').get('date'):
-                payload['message']['date']= payload['message']['date'].isoformat()
-            await ws.send_json(payload)
-        except Exception as e:
-            dead.append(ws)
-    for ws in dead:
-        await disconnect_socket(temp_id, chat_id, ws)
-
-# =========================================================================
-# MESSAGE PROCESSING HANDLERS
-# =========================================================================
-
-async def _process_key_exchange(temp_id, event, message_data, parsed):
-    """
-    Gestisce il setup per un messaggio con flag `cif: in` 
-    che rappresenta il trigger per un iniziale scambio di chiavi pubbliche del protocollo age.
-    """
-    my_id = message_data.get('my_id')
-    if my_id and message_data.get('sender_id') == my_id:
-        message_data['is_json'] = False
-        message_data['text'] = None
-        message_data['chiave'] = "Questo messaggio e' uno scambio di chiave"
-        message_data['is_system'] = True
-        return message_data
-    
-    pubblica = parsed.get("public")
-    if pubblica and is_valid_age_public_key(pubblica):
-        user_data = get_user_data_by_temp_id(temp_id)
-        if user_data:
-            store_public_key_in_vault(
-                user_data,
-                event.chat_id,
-                event.message.sender_id,
-                pubblica,
-                msg_date=getattr(message_data, "date", None),
-                is_group=_is_group_chat_id(event.chat_id),
-                group_title=getattr(event.chat, "title", "Gruppo")
-            )
-    message_data['text'] = None
-    message_data['chiave'] = "Questo messaggio e' uno scambio di chiave"
-    message_data['is_system'] = True
-    return message_data
-
-async def _process_text_message(event, message_data, parsed, chat_keys, data):
-    """
-    Gestisce un messaggio di solo testo e crittografato (flag `cif: on`).
-    Effettua la decifrazione estraendo le candidate private della chat per quel momento, e previene attacchi Replay.
-    """
-    text_encrypted = message_data['json'].get('text')
-    id_message_encrypted = message_data['json'].get('id')
-    timestamp = message_data.get('date')
-
-    candidate_privates = build_candidate_privates(chat_keys, timestamp)
-
-    # Usa le funzioni di utilità introdotte per effettuare base64decode & subprocess decrittazione age
-    text_decifrato = decifra_file_con_age(text_encrypted, candidate_privates)
-    if text_decifrato:
-        text_decifrato = text_decifrato.decode() if isinstance(text_decifrato, bytes) else text_decifrato
-
-    id_message_decifrato_caption = decifra_file_con_age(id_message_encrypted, candidate_privates)
-    if id_message_decifrato_caption:
-        id_message_decifrato_caption = id_message_decifrato_caption.decode() if isinstance(id_message_decifrato_caption, bytes) else id_message_decifrato_caption
-
-    if text_decifrato:
-        try:
-            dizionario = json.loads(text_decifrato)
-            if dizionario.get('cif') == "on":
-                tempo_decifrato = dizionario.get('timestamp')
-                id_message_decifrato = dizionario.get('id')
-                diff_seconds = None
-                if timestamp and tempo_decifrato is not None:
-                    try:
-                        diff_seconds = abs(timestamp.timestamp() - float(tempo_decifrato))
-                    except (TypeError, ValueError):
-                        diff_seconds = None
-
-                # Controllo preventivo per attacchi replay o payload clonacci modificati
-                if (diff_seconds is not None and diff_seconds > 10) or (id_message_decifrato_caption in data['ids_']):
-                    message_data['error'] = "questo messaggio e' frutto di un replay attack"
-                elif id_message_decifrato_caption != id_message_decifrato:
-                    message_data['error'] = "questo messaggio e' stato modificato"
-                else:
-                    message_data['text'] = dizionario['text']
-                    message_data['secure'] = True
-                    data['ids_'].add(id_message_decifrato_caption)
-            else:
-                message_data['error'] = "questo messaggio e' stato modificato"
-        except Exception:
-            traceback.print_exc()
-
-    if 'json' in message_data:
-        del message_data['json']
-    message_data['is_json'] = False
-    return message_data
-
-async def _process_document_payload(client, entity, event, message_data, parsed, chat_keys, data):
-    """
-    Gestisce messaggi di payload lunghi crittografati impacchettati a mò di documento per bypasse i limiti stringa di Telegram (flag `cif: message`).
-    """
-    message_id = message_data.get('id')
-    if not message_id:
-        message_data['error'] = "nessun message id presente"
-        return message_data
-
-    full_message = await client.get_messages(entity, ids=message_id)
-    if not full_message or not full_message.media or not full_message.document:
-        message_data['error'] = "il messaggio dovrebbe contenere un documento, ma non e' presente"
-        return message_data
-
-    file_bytes = io.BytesIO()
-    await client.download_media(full_message, file=file_bytes)
-    file_bytes.seek(0)
-    encrypted_payload = file_bytes.getvalue()
-
-    timestamp = message_data.get('date')
-    candidate_privates = build_candidate_privates(chat_keys, timestamp)
-
-    decrypted_payload = decifra_file_con_age(encrypted_payload, candidate_privates)
-   
-    if decrypted_payload and len(decrypted_payload) >= 4:
-        metadata_size = int.from_bytes(decrypted_payload[:4], byteorder='big')
-        if 0 < metadata_size <= len(decrypted_payload) - 4:
-            inner_metadata_bytes = decrypted_payload[4:4 + metadata_size]
-            message_bytes = decrypted_payload[4 + metadata_size:]
-            try:
-                inner_metadata_str = inner_metadata_bytes.decode('utf-8')
-                inner_metadata = json.loads(inner_metadata_str)
-            except Exception:
-                inner_metadata = None
-
-            if inner_metadata and inner_metadata.get('cif') == 'message':
-                tempo_decifrato = inner_metadata.get('timestamp')
-                id_message_decifrato = inner_metadata.get('id')
-                diff_seconds = None
-                if timestamp and tempo_decifrato is not None:
-                    try:
-                        diff_seconds = abs(timestamp.timestamp() - float(tempo_decifrato))
-                    except (TypeError, ValueError):
-                        diff_seconds = None
-
-                if (diff_seconds is not None and diff_seconds > 10) or (id_message_decifrato in data['ids_']):
-                    message_data['error'] = "questo messaggio e' frutto di un replay attack"
-                else:
-                    message_data['text'] = message_bytes.decode('utf-8', errors='replace')
-                    data['ids_'].add(id_message_decifrato)
-                    message_data['secure'] = True
-                    message_data['file'] = False
-                    
-                    message_data.pop('media_type', None)
-                    message_data.pop('filename', None)
-                    message_data.pop('mime', None)
-                    message_data.pop('size', None)
-
-    if 'json' in message_data:
-        del message_data['json']
-    message_data['is_json'] = False
-    return message_data
-
-async def _process_encrypted_file(client, entity, event, message_data, parsed, chat_keys, data):
-    """
-    Gestisce il trasferimento crittografato di un file multimediale completo (flag `cif: file`),
-    effettuando estrazione dei chunk e header del blob salvato.
-    """
-    message_id = message_data.get('id')
-    header_encrypted_metadata = None
-    
-    if message_id:
-        full_message = await client.get_messages(entity, ids=message_id)
-        if full_message and full_message.media:
-            file_bytes = io.BytesIO()
-            max_bytes = 64 * 1024
-            downloaded = 0
-            async for chunk in client.iter_download(full_message, offset=0, limit=max_bytes):
-                if not chunk:
-                    break
-                file_bytes.write(chunk)
-                downloaded += len(chunk)
-                if downloaded >= max_bytes:
-                    break
-            file_bytes.seek(0)
-            file_head_bytes = file_bytes.getvalue()
-            message_data['file_head'] = base64.b64encode(file_head_bytes).decode()
-            message_data['file_head_size'] = len(file_head_bytes)
-
-            if len(file_head_bytes) >= 8:
-                header_encrypted_size = int.from_bytes(file_head_bytes[4:8], byteorder='big')
-                if 0 < header_encrypted_size <= len(file_head_bytes) - 8:
-                    header_encrypted_metadata = file_head_bytes[8:8 + header_encrypted_size]
-
-    timestamp = message_data.get('date')
-    candidate_privates = build_candidate_privates(chat_keys, timestamp)
-
-    text_decifrato = None
-    if header_encrypted_metadata:
-        text_decifrato = decifra_file_con_age(header_encrypted_metadata, candidate_privates)
-        if text_decifrato:
-            text_decifrato = text_decifrato.decode() if isinstance(text_decifrato, bytes) else text_decifrato
-
-    if text_decifrato:
-        try:
-            dizionario = json.loads(text_decifrato)
-            if dizionario.get('cif') == "file":
-                tempo_decifrato = dizionario.get('timestamp')
-                id_message_decifrato = dizionario.get('id')
-                diff_seconds = None
-                if timestamp and tempo_decifrato is not None:
-                    try:
-                        diff_seconds = abs(timestamp.timestamp() - float(tempo_decifrato))
-                    except (TypeError, ValueError):
-                        diff_seconds = None
-                
-                allowed_seconds = 30
-                file_size = dizionario.get('size')
-                if file_size is not None:
-                    try:
-                        file_size = float(file_size)
-                        allowed_seconds = max(30, file_size / (32 * 1024))
-                    except (TypeError, ValueError):
-                        pass
-
-                if (diff_seconds is not None and diff_seconds > allowed_seconds) or (id_message_decifrato in data['ids_']):
-                    message_data['error'] = "questo messaggio e' frutto di un replay attack"
-                else:
-                    message_data['file'] = True
-                    message_data['filename'] = dizionario.get('filename')
-                    message_data['text'] = dizionario.get('text')
-                    message_data['mime'] = dizionario.get('mime')
-                    message_data['size'] = dizionario.get('size')
-                    message_data['secure'] = True
-                    data['ids_'].add(id_message_decifrato)
-            else:
-                message_data['error'] = "questo messaggio e' stato modificato"
-        except Exception:
-            traceback.print_exc()
-
-    if 'json' in message_data:
-        del message_data['json']
-    message_data['is_json'] = False
-    return message_data
-
 
 def register_telethon_handlers(client, temp_id: str, login_session: str):
-    """
-    Funzione d'ingresso per registrare tutti gli eventi Telegram ricevuti dal core in background di Telethon 
-    a eventi WebSocket elaborati sul backend locale dell'utente.
-    """
+    """Registra gli handler Telethon per instradare gli eventi Telegram al WebSocket locale."""
     if getattr(client, "_cc_handlers_added", False):
         return
 
@@ -584,3 +226,4 @@ def register_telethon_handlers(client, temp_id: str, login_session: str):
     client.add_event_handler(handle_raw_update, events.Raw())
     client.add_event_handler(handle_chat_action, events.ChatAction())
     client._cc_handlers_added = True
+

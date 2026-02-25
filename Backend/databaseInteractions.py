@@ -1,15 +1,12 @@
 from database.sqlite import get_connection
 from fastapi import HTTPException
 import sqlite3
-from utils import deriva_master_key, decifra_vault
+from services.crypto_service import deriva_master_key, decifra_vault
 import hashlib
 from config import pepper
 
 def get_user_informations(username: str, password: str) -> dict:
-    """
-    Recupera le credenziali utente (salt e vault cifrato) dal DB tramite lo username pre-hashato.
-    Deriva la master key dalla password in input per decifrare il Master Vault ritornandolo come dictionary.
-    """
+    """Recupera e decifra il master vault dell'utente dal DB dato username e password."""
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -35,9 +32,7 @@ def get_user_informations(username: str, password: str) -> dict:
     return vault_decyphered
 
 def set_user_vault(username: str, vault_cyphered: bytes) -> None:
-    """
-    Sovrascrive o aggiorna in modo atomico il Master Vault cifrato di un utente nel DB SQLite.
-    """
+    """Aggiorna il master vault cifrato di un utente nel DB."""
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -50,10 +45,7 @@ def set_user_vault(username: str, vault_cyphered: bytes) -> None:
         raise HTTPException(status_code=500, detail=str(error))
 
 def check_username_unicity(username: str) -> None:
-    """
-    Si assicura che in fase di registrazione lo username (già hashato) non sia duplicato.
-    Lancia un'eccezione col codice 409 in caso di collisione.
-    """
+    """Verifica che lo username non esista già nel DB, altrimenti lancia eccezione."""
     try:
         with get_connection() as conn:
             cursor = conn.cursor()
@@ -69,10 +61,7 @@ def check_username_unicity(username: str) -> None:
         raise HTTPException(status_code=500, detail=str(error))
 
 def get_gruppo_vault(username: str, chat_id: str, entity, data: dict) -> tuple[bool, dict]:
-    """
-    Estrapola il sub-vault specifico di un gruppo dal DB. Ritorna una tupla:
-    (insert_new_vault_flag, vault_deciphered_dict). Se non esiste lo innesca a vuoto.
-    """
+    """Estrapola il sub-vault di un gruppo dal DB o ne inizializza uno nuovo."""
     chat_id_cif = hashlib.sha256(pepper.encode() + str(chat_id).encode()).hexdigest()
 
     with get_connection() as conn:
@@ -97,10 +86,7 @@ def get_gruppo_vault(username: str, chat_id: str, entity, data: dict) -> tuple[b
     return insert_new_vault, vault_deciphered
                 
 async def get_chat_vault(username: str, chat_id: str, client, data: dict) -> tuple[bool, dict]:
-    """
-    Estrapola il sub-vault specifico di una chat (1a1) dal DB. Ritorna una tupla:
-    (insert_new_vault_flag, vault_deciphered_dict). Se non esiste lo innesca a vuoto.
-    """
+    """Estrapola il sub-vault di una chat singola dal DB o ne inizializza uno nuovo."""
     chat_id_cif = hashlib.sha256(pepper.encode() + str(chat_id).encode()).hexdigest()
 
     with get_connection() as conn:

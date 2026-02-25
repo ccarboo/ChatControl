@@ -39,7 +39,7 @@ def initDB():
 
 
 def get_connection():
-    """Open SQLite connection with foreign keys enforced."""
+    """Restituisce una connessione SQLite con chiavi esterne attive."""
     conn = sqlite3.connect(DATABASE_PATH)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn

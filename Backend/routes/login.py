@@ -9,7 +9,8 @@ from telethon.errors import SessionPasswordNeededError
 
 from database.sqlite import get_connection
 from config import pepper
-from utils import cipher, login_cache, cifra_vault, is_logged_in
+from services.auth_service import cipher, login_cache, is_logged_in
+from services.crypto_service import cifra_vault
 from realtime import register_telethon_handlers
 from databaseInteractions import get_user_informations, set_user_vault
 
@@ -24,11 +25,7 @@ class SmsCode(BaseModel):
 
 @router.post("/login")
 async def login_user(credentials: LoginUser, response: Response):
-    """
-    Endpoint primario per l'autenticazione. 
-    Verifica le credenziali estrapolando e decifrando il vault dell'utente dal database SQLite.
-    Ripristina la sessione Telegram e alloca le strutture in RAM per il backend.
-    """
+    """Endpoint primario per l'autenticazione. Decifra il vault e ripristina la sessione."""
     username = hashlib.sha256(pepper.encode() + credentials.username.encode()).hexdigest()
     temp_id = secrets.token_hex(16)
     temp_id_encrypted = cipher.encrypt(temp_id.encode()).decode()
@@ -85,10 +82,7 @@ async def login_user(credentials: LoginUser, response: Response):
 
 @router.post("/login/expired")
 async def login_user_expired(credentials: SmsCode, login_session: str = Cookie(None)):
-    """
-    Endpoint di riserva utilizzato solo quando la sessione standard risulta scaduta.
-    Permette di fornire l'SMS di sblocco inviato e ripristina la validità del Vault cifrato.
-    """
+    """Gestisce il login fallback con codice SMS per sessioni scadute."""
     if not login_session:
         raise HTTPException(status_code=400, detail="Sessione non trovata")
     
@@ -133,10 +127,7 @@ async def login_check(login_session: str = Cookie(None)):
 
 @router.post("/logout")
 async def logout(response: Response, login_session: str = Cookie(None)):
-    """
-    Rimuove i cookie e fa il drop esplicito della cache volatile RAM e del socket Telegram.
-    Non elimina la sessione crittografata persistente nel DB.
-    """
+    """Effettua il logout rimuovendo cache volatile e cookie, mantenendo la sessione DB."""
     if login_session:
         try:
             temp_id = cipher.decrypt(login_session.encode()).decode()

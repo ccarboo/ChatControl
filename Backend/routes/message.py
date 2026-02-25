@@ -13,10 +13,12 @@ import time
 import hashlib
 
 from config import pepper
-from utils import (
-    is_logged_in, cifra_con_age, genera_chiavi, cifra_vault, 
-    get_chat_chyper_keys, get_group_chyper_keys, split_message
+from services.auth_service import is_logged_in
+from services.crypto_service import (
+    cifra_con_age, genera_chiavi, cifra_vault, 
+    get_chat_chyper_keys, get_group_chyper_keys
 )
+from services.telegram_service import split_message
 from databaseInteractions import set_user_vault
 
 router = APIRouter()
@@ -39,10 +41,7 @@ class InitKey(BaseModel):
     chat_id: int
 
 async def wait_for_public_key_message(client, chat_id: int, public_key: str, timeout: float = 2.0, interval: float = 0.2) -> bool:
-    """
-    Verifica se la 'chiave pubblica' è stata ricevuta dai server Telegram entro un timeout temporale.
-    Assicura che un messaggio cifrato successivo non venga inviato prima che l'inizializzazione sia completa.
-    """
+    """Verifica la ricezione della chiave pubblica per evitare invii cifrati prematuri."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
@@ -57,11 +56,7 @@ async def wait_for_public_key_message(client, chat_id: int, public_key: str, tim
     return False
 
 def _build_encrypted_payload(metadata: dict, file_content: bytes, recipient_keys: list) -> bytes:
-    """
-    Costruisce un payload cifrato formato dal timestamp e header di metadati json, seguito
-    dal payload effettivo byte per byte. Gestisce intrinsecamente il doppio offuscamento Age.
-    Restituisce un blocco bytes pronto per l'invio.
-    """
+    """Costruisce un payload cifrato formato da metadati json e contenuto del file."""
     json_metadata = json.dumps(metadata, sort_keys=True)
     metadata_bytes = json_metadata.encode('utf-8')
     metadata_size = len(metadata_bytes)
@@ -93,10 +88,7 @@ def _build_encrypted_payload(metadata: dict, file_content: bytes, recipient_keys
 
 @router.post("/messages/delete")
 async def delete_message(message: DeleteMessage, login_session: str = Cookie(None)):
-    """
-    Elimina (revoca) un messaggio dalla chat specificata per entrambi i lati.
-    Ritorna lo stato dell'avvenuta eliminazione o lancia un'eccezione in caso di permessi non sufficienti.
-    """
+    """Elimina (revoca) un messaggio dalla chat per tutti gli utenti."""
     _, data = is_logged_in(login_session, True)
     client = data['client']
 
@@ -120,10 +112,7 @@ async def send_file(
     file: UploadFile = File(...),
     login_session: str = Cookie(None)
 ):
-    """
-    Invia un file multimediale. Può essere standard (chiaro) oppure inoltrato
-    attraverso il tunnel crittografico sicuro `age` (cif: file).
-    """
+    """Invia un file multimediale, in chiaro o cifrato con age."""
     _, data = is_logged_in(login_session, True)
     client = data['client']
 
@@ -215,11 +204,7 @@ async def send_file(
 
 @router.post("/messages/send")
 async def send_message(credentials: MessagePayload, login_session: str = Cookie(None)):
-    """
-    Invia un messaggio di testo standard o crittografato (cif: on).
-    Per messaggi molto lunghi, gestisce la divisione in chunks o la conversione in
-    documenti crittografati binari per mascherare la lunghezza (cif: message).
-    """
+    """Invia un messaggio di testo, testuale o crittografato (incluso bypass limite telegram tramite payload document)."""
     _, data = is_logged_in(login_session, True)
     client = data['client']
     chat_id = credentials.chat_id
@@ -327,10 +312,7 @@ async def send_message(credentials: MessagePayload, login_session: str = Cookie(
 
 @router.post("/messages/initializing")
 async def send_public_key(credentials: InitKey, login_session: str = Cookie(None)):
-    """
-    Genera una coppia di chiavi per il dispositivo e la storicizza nel Vault per la specifica chat,
-    inoltrando la parte pubblica (cif: in) come messaggio.
-    """
+    """Genera una coppia di chiavi per la chat, aggiorna il Vault e invia la chiave pubblica."""
     _, data = is_logged_in(login_session, True)
     client = data['client']
     chat_id = credentials.chat_id
