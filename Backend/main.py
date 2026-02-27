@@ -1,15 +1,17 @@
-from routes_handler import router as r
 from fastapi import FastAPI
 from database import sqlite as db_setup
-from routes_handler import router as api_router
+from routes import router as api_router
 from fastapi.middleware.cors import CORSMiddleware
 
 
 
 
 
+# Istanzia l'applicazione FastAPI principale per il backend di ChatControl
 app = FastAPI()
 
+# Configurazione del middleware CORS per abilitare le richieste cross-origin
+# Limita l'accesso solo agli URL del frontend di sviluppo (locale) e di produzione
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -20,10 +22,11 @@ app.add_middleware(
         "https://apernici.it",
     ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # Permetti tutti i metodi HTTP (GET, POST, ecc.)
+    allow_headers=["*"],  # Permetti tutti gli header
 )
 
+# Registra il router principale (raccoglie tutti i sotto-router da routes/)
 app.include_router(api_router)
 # Initialize database on backend startup
 @app.on_event("startup")

@@ -3,7 +3,7 @@ import base64
 import traceback
 import hashlib
 import io
-from config import pepper
+from core.config import pepper
 from services.auth_service import get_user_data_by_temp_id
 from services.telegram_service import is_group_chat_id
 from services.crypto_service import (
@@ -11,7 +11,9 @@ from services.crypto_service import (
 )
 
 async def _process_key_exchange(temp_id, event, message_data, parsed):
+    """Gestisce l'evento in cui un altro utente ha inviato il payload JSON strutturato contenente la chiave criptografica."""
     my_id = message_data.get('my_id')
+    # Ignora in UI il payload di scambio se l'ha originato lo stesso mittente locale
     if my_id and message_data.get('sender_id') == my_id:
         message_data['is_json'] = False
         message_data['text'] = None
@@ -23,6 +25,7 @@ async def _process_key_exchange(temp_id, event, message_data, parsed):
     if pubblica and is_valid_age_public_key(pubblica):
         user_data = get_user_data_by_temp_id(temp_id)
         if user_data:
+            # Salva in modo permanente la chiave appena ricevuta nel Vault del contatto/gruppo
             store_public_key_in_vault(
                 user_data,
                 event.chat_id,
@@ -38,12 +41,15 @@ async def _process_key_exchange(temp_id, event, message_data, parsed):
     return message_data
 
 async def _process_text_message(event, message_data, parsed, chat_keys, data):
+    """Gestisce la ricezione di payload testuale cifrato con crittografia age (via MTProto)."""
     text_encrypted = message_data['json'].get('text')
     id_message_encrypted = message_data['json'].get('id')
     timestamp = message_data.get('date')
 
+    # Identifica le chiavi private idonee alla decifrazione in funzione del timestamp temporale
     candidate_privates = build_candidate_privates(chat_keys, timestamp)
 
+    # Tenta la decifratura asimmetrica passando come input le stringhe in base64
     text_decifrato = decifra_file_con_age(text_encrypted, candidate_privates)
     if text_decifrato:
         text_decifrato = text_decifrato.decode() if isinstance(text_decifrato, bytes) else text_decifrato

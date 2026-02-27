@@ -10,7 +10,7 @@ import hashlib
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
 from fastapi import HTTPException
-from config import secret_key, pepper
+from core.config import secret_key, pepper
 from database.sqlite import get_connection
 
 # Inizializzazione della chiave segreta per Fernet utilizzando la secret_key dalla configurazione

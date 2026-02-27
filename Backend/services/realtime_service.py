@@ -7,7 +7,7 @@ from telethon.tl.types import (
     UpdateDeleteChannelMessages,
     UpdateDeleteMessages,
 )
-from config import pepper
+from core.config import pepper
 from database.sqlite import get_connection
 from services.crypto_service import cifra_vault, decifra_vault
 from services.auth_service import get_user_data_by_temp_id, is_logged_in
@@ -65,7 +65,7 @@ async def _remove_user_from_vault(temp_id: str, chat_id: int, user_id: int | Non
         print(f"ERROR remove_user_from_vault: {error}")
 
 def _serialize_message(msg):
-    """Converte il messaggio nativo di Telethon in un dizionario Python."""
+    """Converte l'oggetto Entity Messaggio nativo di Telethon in un dizionario Python piatto facile da spedire su WebSocket."""
     message_data = {
         "id": msg.id,
         "chat_id": msg.chat_id,
@@ -81,7 +81,10 @@ def _serialize_message(msg):
 
 
 def register_telethon_handlers(client, temp_id: str, login_session: str):
-    """Registra gli handler Telethon per instradare gli eventi Telegram al WebSocket locale."""
+    """
+    Registra gli handler (listener callback) necessari sull'istanza Telethon per intercettare gli update
+    push da Telegram (NewMessage, MessageEdited, MessageDeleted) e instradarli istantaneamente ai WebSocket web client.
+    """
     if getattr(client, "_cc_handlers_added", False):
         return
 

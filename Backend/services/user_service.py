@@ -3,7 +3,7 @@ from fastapi import HTTPException
 import sqlite3
 from services.crypto_service import deriva_master_key, decifra_vault
 import hashlib
-from config import pepper
+from core.config import pepper
 
 def get_user_informations(username: str, password: str) -> dict:
     """Recupera e decifra il master vault dell'utente dal DB dato username e password."""
@@ -11,6 +11,7 @@ def get_user_informations(username: str, password: str) -> dict:
         with get_connection() as conn:
             cursor = conn.cursor()
             params = (username,)
+            # Estrae il DB salt (univoco per utente) per derivare correttamente la masterkey
             cursor.execute(
                 "SELECT salt, vault FROM utenti WHERE username = ? LIMIT 1",
                 params,
@@ -22,9 +23,11 @@ def get_user_informations(username: str, password: str) -> dict:
         raise HTTPException(status_code=500, detail=str(error))
     
     salt_db = risultati[0]
+    # Rigenera la chiave AES (master_key) sfruttando l'Argon2 passata dal client al volo
     master_key = deriva_master_key(password, salt_db)
 
     try:
+        # Decifra e de-serializza il blob restituendo il dizionario (master vault)
         vault_decyphered = decifra_vault(risultati[1], master_key)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

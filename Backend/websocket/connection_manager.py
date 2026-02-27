@@ -2,15 +2,18 @@ import asyncio
 from fastapi import WebSocket
 
 # temp_id -> chat_id -> set[WebSocket]
+# Struttura per gestire connessioni WS multiple aperte dalla stessa utenza per la stessa chat (es. più tab)
 _active_connections = {}
 _connections_lock = asyncio.Lock()
 
 # temp_id -> chat_id -> {"ids": set[int], "order": list[int]}
+# Struttura RAM per deduplicare messaggi recenti o gestire eliminazioni in tempo reale senza dover ricaricare dal DB
 _message_index = {}
 _message_index_lock = asyncio.Lock()
 _MAX_INDEX_PER_CHAT = 3000
 
 async def connect_socket(temp_id: str, chat_id: int, websocket: WebSocket):
+    """Accetta e registra una nuova connessione WebSocket."""
     await websocket.accept()
     async with _connections_lock:
         user_map = _active_connections.setdefault(temp_id, {})
@@ -18,6 +21,7 @@ async def connect_socket(temp_id: str, chat_id: int, websocket: WebSocket):
         sockets.add(websocket)
 
 async def disconnect_socket(temp_id: str, chat_id: int, websocket: WebSocket):
+    """Rimuove in modo sicuro una connessione chiusa dalle strutture dati in memoria."""
     async with _connections_lock:
         user_map = _active_connections.get(temp_id)
         if not user_map:
@@ -26,12 +30,14 @@ async def disconnect_socket(temp_id: str, chat_id: int, websocket: WebSocket):
         if not sockets:
             return
         sockets.discard(websocket)
+        # Pulisce i rami vuoti dell'albero delle connessioni per evitare memory leak
         if not sockets:
             user_map.pop(chat_id, None)
         if not user_map:
             _active_connections.pop(temp_id, None)
 
 async def broadcast_event(temp_id: str, chat_id: int, payload: dict):
+    """Invia un payload testuale (JSON) a tutti i socket collegati a determinati temp_id e chat_id."""
     async with _connections_lock:
         sockets = list(_active_connections.get(temp_id, {}).get(chat_id, set()))
     if not sockets:

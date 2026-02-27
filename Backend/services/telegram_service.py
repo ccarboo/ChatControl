@@ -3,7 +3,7 @@ from telethon.tl.types import DocumentAttributeAnimated
 MESSAGE_LIMIT = 4096
 
 def split_message(text: str, limit: int = MESSAGE_LIMIT) -> list[str]:
-    """Divide un messaggio in frammenti più piccoli rispettando il limite di caratteri."""
+    """Divide un messaggio in frammenti più piccoli rispettando il limite rigoroso di caratteri imposto dalle API Telegram (standard 4096)."""
     if limit <= 0:
         raise ValueError("limit must be > 0")
     return [text[i:i + limit] for i in range(0, len(text), limit)]
@@ -16,7 +16,7 @@ def is_group_chat_id(chat_id: int) -> bool:
         return False
 
 def set_media(msg, message_data):
-    """Estrae e normalizza le informazioni sui file multimediali da un messaggio Telegram."""
+    """Estrae e normalizza in un dizionario custom le info sui file multimediali nativi (foto, video, document, sticker, gif) pescati dai messaggi Telegram."""
     message_data['file'] = True
             
     # Controlla PRIMA sticker e gif (altrimenti finiscono come documenti)

@@ -40,3 +40,4 @@ __screenshots__/
 *.venv
 *.env
 *.pem
+Backend/backend_architecture.md
