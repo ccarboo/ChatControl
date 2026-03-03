@@ -15,7 +15,7 @@ from telethon.tl.types import DocumentAttributeFilename
 from core.config import pepper
 from services.auth_service import is_logged_in
 from services.crypto_service import (
-    cifra_con_age, genera_chiavi, cifra_vault, 
+    cifra_payload, genera_chiavi, cifra_vault, 
     get_chat_chyper_keys, get_group_chyper_keys
 )
 from services.telegram_service import split_message
@@ -48,12 +48,12 @@ def _build_encrypted_payload(metadata: dict, file_content: bytes, recipient_keys
     metadata_bytes = json_metadata.encode('utf-8')
     metadata_size = len(metadata_bytes)
 
-    encrypted_metadata = cifra_con_age(metadata_bytes, recipient_keys)
+    encrypted_metadata = cifra_payload(metadata_bytes, recipient_keys)
     if encrypted_metadata is None:
         raise HTTPException(status_code=500, detail="Errore durante la cifratura dei metadati con age")
 
     body_plain = metadata_size.to_bytes(4, byteorder='big') + metadata_bytes + file_content
-    encrypted_body = cifra_con_age(body_plain, recipient_keys)
+    encrypted_body = cifra_payload(body_plain, recipient_keys)
     if encrypted_body is None:
         raise HTTPException(status_code=500, detail="Errore durante la cifratura del corpo file con age")
 
@@ -229,8 +229,8 @@ async def send_message_logic(chat_id: int, text: str, cryph: bool, group: bool, 
         }
 
         json_da_cifrare = json.dumps(da_cifrare, sort_keys=True)
-        text_cyp = cifra_con_age(json_da_cifrare, recipient_keys)
-        encrypted_id = cifra_con_age(id_message, recipient_keys)
+        text_cyp = cifra_payload(json_da_cifrare, recipient_keys)
+        encrypted_id = cifra_payload(id_message, recipient_keys)
         
         if text_cyp is None or encrypted_id is None:
             raise HTTPException(status_code=500, detail="Errore durante la cifratura con age")

@@ -7,7 +7,7 @@ from core.config import pepper
 from services.auth_service import get_user_data_by_temp_id
 from services.telegram_service import is_group_chat_id
 from services.crypto_service import (
-    is_valid_age_public_key, store_public_key_in_vault, build_candidate_privates, decifra_file_con_age
+    is_valid_public_key, store_public_key_in_vault, build_candidate_privates, decifra_payload
 )
 
 async def _process_key_exchange(temp_id, event, message_data, parsed):
@@ -22,7 +22,7 @@ async def _process_key_exchange(temp_id, event, message_data, parsed):
         return message_data
     
     pubblica = parsed.get("public")
-    if pubblica and is_valid_age_public_key(pubblica):
+    if pubblica and is_valid_public_key(pubblica):
         user_data = get_user_data_by_temp_id(temp_id)
         if user_data:
             # Salva in modo permanente la chiave appena ricevuta nel Vault del contatto/gruppo
@@ -50,11 +50,11 @@ async def _process_text_message(event, message_data, parsed, chat_keys, data):
     candidate_privates = build_candidate_privates(chat_keys, timestamp)
 
     # Tenta la decifratura asimmetrica passando come input le stringhe in base64
-    text_decifrato = decifra_file_con_age(text_encrypted, candidate_privates)
+    text_decifrato = decifra_payload(text_encrypted, candidate_privates)
     if text_decifrato:
         text_decifrato = text_decifrato.decode() if isinstance(text_decifrato, bytes) else text_decifrato
 
-    id_message_decifrato_caption = decifra_file_con_age(id_message_encrypted, candidate_privates)
+    id_message_decifrato_caption = decifra_payload(id_message_encrypted, candidate_privates)
     if id_message_decifrato_caption:
         id_message_decifrato_caption = id_message_decifrato_caption.decode() if isinstance(id_message_decifrato_caption, bytes) else id_message_decifrato_caption
 
@@ -108,7 +108,7 @@ async def _process_document_payload(client, entity, event, message_data, parsed,
     timestamp = message_data.get('date')
     candidate_privates = build_candidate_privates(chat_keys, timestamp)
 
-    decrypted_payload = decifra_file_con_age(encrypted_payload, candidate_privates)
+    decrypted_payload = decifra_payload(encrypted_payload, candidate_privates)
    
     if decrypted_payload and len(decrypted_payload) >= 4:
         metadata_size = int.from_bytes(decrypted_payload[:4], byteorder='big')
@@ -181,7 +181,7 @@ async def _process_encrypted_file(client, entity, event, message_data, parsed, c
 
     text_decifrato = None
     if header_encrypted_metadata:
-        text_decifrato = decifra_file_con_age(header_encrypted_metadata, candidate_privates)
+        text_decifrato = decifra_payload(header_encrypted_metadata, candidate_privates)
         if text_decifrato:
             text_decifrato = text_decifrato.decode() if isinstance(text_decifrato, bytes) else text_decifrato
 

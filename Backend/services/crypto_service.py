@@ -1,4 +1,8 @@
 import base64
+import nacl.public
+import nacl.secret
+import nacl.utils
+import nacl.exceptions
 import subprocess
 import json
 import re
@@ -51,100 +55,146 @@ def decifra_vault(blob_cifrato, master_key):
     except Exception as e:
         raise ValueError(f"Errore nella decifrazione del vault: {str(e)}")
 
-def cifra_con_age(plaintext: str | bytes, public_keys: list):
+
+def cifra_payload(plaintext: str | bytes, public_keys: list):
     """
-    Cifra un testo o dei dati binari utilizzando il tool a riga di comando `age`, 
-    indirizzandolo a una o più chiavi pubbliche.
+    Cifra un testo o dei dati binari utilizzando PyNaCl con Envelope Encryption.
     """
     try:
-        # Costruisce la lista di argomenti per il comando age: flag -r per ogni destinatario
-        args = ['age']
-        for key in public_keys:
-            args.extend(['-r', key])
+        dek = nacl.utils.random(nacl.secret.SecretBox.KEY_SIZE)
         
-        # Prepara l'input in formato bytes
-        if isinstance(plaintext, bytes):
-            input_data = plaintext
-        else:
-            input_data = plaintext.encode()
+        encrypted_deks = []
+        for pk_b64 in public_keys:
+            try:
+                pk_bytes = base64.b64decode(pk_b64)
+                pub_key = nacl.public.PublicKey(pk_bytes)
+                sealed_box = nacl.public.SealedBox(pub_key)
+                enc_dek = sealed_box.encrypt(dek)
+                encrypted_deks.append(base64.b64encode(enc_dek).decode('utf-8'))
+            except Exception:
+                continue
         
-        # Esegue age con i dati passati tramite standard input (input binario / output binario)
-        result = subprocess.run(args, input=input_data, capture_output=True, check=True)
-        ciphertext = result.stdout
+        if not encrypted_deks:
+            # Failsafe: se non ci sono chiavi PyNaCl, probabilmente stiamo usando vecchie chiavi 'age1...'
+            import subprocess
+            args = ['age']
+            for pk in public_keys:
+                args.extend(['-r', str(pk)])
+            input_data = plaintext.encode('utf-8') if isinstance(plaintext, str) else plaintext
+            try:
+                res = subprocess.run(args, input=input_data, capture_output=True, check=True)
+                return base64.b64encode(res.stdout).decode()
+            except Exception as ex:
+                print(f"Errore fallback age cifratura: {ex}")
+                return None
+        if isinstance(plaintext, str):
+            plaintext = plaintext.encode('utf-8')
+            
+        box = nacl.secret.SecretBox(dek)
+        nonce = nacl.utils.random(nacl.secret.SecretBox.NONCE_SIZE)
+        encrypted_payload = box.encrypt(plaintext, nonce)
         
-        # Converte il risultato in base64 per facilitarne la trasmissione su canali testuali
-        return base64.b64encode(ciphertext).decode()
-    except subprocess.CalledProcessError as e:
-        print(f"Errore cifratura age: {e.stderr}")
+        envelope = {
+            "v": 2, # Version 2 per PyNaCl (v1 era age implicito)
+            "deks": encrypted_deks,
+            "data": base64.b64encode(encrypted_payload).decode('utf-8')
+        }
+        
+        return base64.b64encode(json.dumps(envelope).encode()).decode()
+    except Exception as e:
+        print(f"Errore cifratura PyNaCl: {e}")
         return None
 
-def decifra_file_con_age(ciphertext, candidate_privates):
+
+
+def decifra_payload(ciphertext, candidate_privates):
     """
-    Tenta di decifrare un testo cifrato con `age` iterando su una lista di chiavi private candidate, 
-    fino a trovare quella corretta.
+    Tenta di decifrare un testo cifrato con PyNaCl. Con fallback su 'age' per legacy messages.
     """
-    # Prova ogni chiave privata fornita fino a quando una non riesce a decifrare il messaggio
-    for privata in candidate_privates:
+    try:
+        raw_bytes = ciphertext.encode() if isinstance(ciphertext, str) else ciphertext
         try:
-            # Semplificazione del parsing dell'input a bytes crudi
-            raw_bytes = ciphertext.encode() if isinstance(ciphertext, str) else ciphertext
-            if not isinstance(raw_bytes, bytes):
-                raw_bytes = str(ciphertext).encode()
-
-            try:
-                # Prova a decodificare da base64, se fallisce assume sia già raw age data
-                input_bytes = base64.b64decode(raw_bytes, validate=True)
-            except Exception:
-                input_bytes = raw_bytes
-
-            # `age` necessita di leggere la chiave privata da un file, per cui creiamo un file temporaneo sicuro
-            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
-                keyfile.write(privata)
-                keyfile_path = keyfile.name
-            try:
-                # Esegue il comando di decifrazione
-                result = subprocess.run(
-                    ['age', '-d', '-i', keyfile_path],
-                    input=input_bytes,
-                    capture_output=True,
-                    check=True
-                )
-                return result.stdout  # Ritorna i bytes in chiaro al primo successo
-            finally:
-                # Assicura sempre l'eliminazione del file contenente la chiave privata temporanea
-                os.unlink(keyfile_path)
+            input_bytes = base64.b64decode(raw_bytes, validate=True)
         except Exception:
-            # Se la decifratura fallisce con questa chiave, prova la successiva
-            continue
+            input_bytes = raw_bytes
+            
+        try: # Prova JSON Envelope (PyNaCl)
+            envelope = json.loads(input_bytes.decode('utf-8'))
+            if envelope.get("v") == 2:
+                encrypted_deks = envelope.get("deks", [])
+                encrypted_data = base64.b64decode(envelope.get("data", ""))
+                
+                for priv_b64 in candidate_privates:
+                    try:
+                        priv_bytes = base64.b64decode(priv_b64)
+                        priv_key = nacl.public.PrivateKey(priv_bytes)
+                        sealed_box = nacl.public.SealedBox(priv_key)
+                        
+                        dek = None
+                        for enc_dek_b64 in encrypted_deks:
+                            try:
+                                enc_dek_bytes = base64.b64decode(enc_dek_b64)
+                                dek = sealed_box.decrypt(enc_dek_bytes)
+                                break
+                            except nacl.exceptions.CryptoError:
+                                continue
+                                
+                        if dek:
+                            box = nacl.secret.SecretBox(dek)
+                            return box.decrypt(encrypted_data)
+                    except Exception:
+                        continue
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            pass
+            
+        # Fallback ad 'age' se non è un JSON PyNaCl valido
+        for privata in candidate_privates:
+            try:
+                import os, tempfile, subprocess
+                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as keyfile:
+                    keyfile.write(privata)
+                    keyfile_path = keyfile.name
+                try:
+                    res = subprocess.run(['age', '-d', '-i', keyfile_path], input=input_bytes, capture_output=True, check=True)
+                    return res.stdout
+                finally:
+                    os.unlink(keyfile_path)
+            except Exception:
+                continue
+    except Exception:
+        pass
     return None
 
 def genera_chiavi():
     """
-    Genera una coppia di chiavi `age` (pubblica e privata) richiamando lo strumento CLI `age-keygen`.
+    Genera una coppia di chiavi `PyNaCl` (Curve25519) (pubblica e privata).
     """
     try:
-        risultato = subprocess.run(['age-keygen'], capture_output=True, text=True, check=True)
-        output = risultato.stdout
-        linee = output.splitlines()
-        pubblica = ""
-        privata = ""
-        # Estrae i valori delle chiavi dall'output formattato standard di age-keygen
-        for linea in linee:
-            if linea.startswith("# public key:"):
-                pubblica = linea.split(":")[1].strip()
-            elif linea.startswith("AGE-SECRET-KEY-1"):
-                privata = linea.strip()
+        private_key = nacl.public.PrivateKey.generate()
+        public_key = private_key.public_key
+        
+        pubblica = base64.b64encode(bytes(public_key)).decode('utf-8')
+        privata = base64.b64encode(bytes(private_key)).decode('utf-8')
         return pubblica, privata
-    except subprocess.CalledProcessError:
-        print("Errore: age-keygen non è installato. Usa 'sudo apt install age'")
+    except Exception as e:
+        print(f"Errore genera_chiavi PyNaCl: {e}")
         return None, None
 
-def is_valid_age_public_key(key: str):
+
+
+def is_valid_public_key(key: str):
     """
-    Verifica se una stringa è una chiave pubblica `age` valida, controllandone il formato e la lunghezza.
+    Verifica se una stringa è una chiave pubblica PyNaCl valida.
+    Supporta anche fallback alle chiavi legacy 'age1...'
     """
-    # Le chiavi pubbliche age iniziano con "age1" seguite da 58 caratteri alfanumerici (Bech32)
-    return bool(re.match(r"^age1[0-9a-z]{58}$", key))
+    if str(key).startswith("age1") and len(str(key)) == 62:
+        return True
+    try:
+        decoded = base64.b64decode(key, validate=True)
+        return len(decoded) == nacl.public.PublicKey.SIZE
+    except Exception:
+        return False
+
 
 def store_public_key_in_vault(
     user_data,

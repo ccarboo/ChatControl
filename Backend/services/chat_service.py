@@ -12,8 +12,8 @@ from fastapi.responses import StreamingResponse
 
 from core.config import pepper
 from services.crypto_service import (
-    cifra_vault, is_valid_age_public_key, store_public_key_in_vault,
-    decifra_file_con_age, build_candidate_privates
+    cifra_vault, is_valid_public_key, store_public_key_in_vault,
+    decifra_payload, build_candidate_privates
 )
 from services.auth_service import is_logged_in
 from services.telegram_service import is_group_chat_id, set_media
@@ -173,7 +173,7 @@ def _populate_decrypted_ids(messages_in_window: list, data: dict, chat_keys: dic
             if not candidate_privates:
                 continue
 
-            dec_id = decifra_file_con_age(id_message, candidate_privates)
+            dec_id = decifra_payload(id_message, candidate_privates)
             if dec_id:
                 dec_id_str = dec_id.decode('utf-8') if isinstance(dec_id, bytes) else dec_id
                 data['ids_'].add(dec_id_str)
@@ -189,7 +189,7 @@ def _handle_key_exchange(message: dict, entity, chat_id: int, data: dict, my_id:
         return
 
     pubblic = message['json'].get('public')
-    if pubblic is None or not is_valid_age_public_key(pubblic):
+    if pubblic is None or not is_valid_public_key(pubblic):
         return
 
     store_public_key_in_vault(
@@ -208,11 +208,11 @@ def _handle_encrypted_text(message: dict, data: dict, chat_keys: dict):
     id_enc = message['json'].get('id')
 
     candidates = build_candidate_privates(chat_keys, timestamp)
-    text_dec = decifra_file_con_age(text_enc, candidates)
+    text_dec = decifra_payload(text_enc, candidates)
     if text_dec:
         text_dec = text_dec.decode('utf-8') if isinstance(text_dec, bytes) else text_dec
 
-    id_dec_cap = decifra_file_con_age(id_enc, candidates)
+    id_dec_cap = decifra_payload(id_enc, candidates)
     if id_dec_cap:
         id_dec_cap = id_dec_cap.decode('utf-8') if isinstance(id_dec_cap, bytes) else id_dec_cap
 
@@ -270,7 +270,7 @@ async def _handle_encrypted_file(message: dict, client, entity, data: dict, chat
 
     text_dec = None
     if header_encrypted_metadata:
-        text_dec = decifra_file_con_age(header_encrypted_metadata, candidates)
+        text_dec = decifra_payload(header_encrypted_metadata, candidates)
         if text_dec:
             text_dec = text_dec.decode('utf-8') if isinstance(text_dec, bytes) else text_dec
 
@@ -321,7 +321,7 @@ async def _handle_encrypted_document_payload(message: dict, client, entity, data
 
     timestamp = message.get('date')
     candidates = build_candidate_privates(chat_keys, timestamp)
-    decrypted_payload = decifra_file_con_age(encrypted_payload, candidates)
+    decrypted_payload = decifra_payload(encrypted_payload, candidates)
                     
     if decrypted_payload and len(decrypted_payload) >= 4:
         metadata_size = int.from_bytes(decrypted_payload[:4], byteorder='big')
@@ -471,7 +471,7 @@ async def get_init_messages_logic(chat_id: int, login_session: str):
             parsed = json.loads(text)
             cif_flag = parsed.get('CIF') or parsed.get('cif')
             pubblic = parsed.get('public')
-            if cif_flag == "in" and pubblic is not None and is_valid_age_public_key(pubblic):
+            if cif_flag == "in" and pubblic is not None and is_valid_public_key(pubblic):
                 init_messages.append({
                     'id': msg.id, 'date': msg.date, 'public_key': pubblic, 'sender_id': msg.sender_id
                 })
@@ -641,14 +641,14 @@ async def download_encrypt_media_logic(chat_id: int, message_id: int, login_sess
             raise HTTPException(status_code=400, detail="Header invalido")
 
         header_encrypted_metadata = payload_bytes[8:8 + header_encrypted_size]
-        decrypted_metadata_bytes = decifra_file_con_age(header_encrypted_metadata, candidates)
+        decrypted_metadata_bytes = decifra_payload(header_encrypted_metadata, candidates)
         if not decrypted_metadata_bytes: raise HTTPException(status_code=400, detail="Impossibile decifrare metadata")
 
         outer_metadata = json.loads(decrypted_metadata_bytes.decode('utf-8'))
         if outer_metadata.get('cif') != 'file': raise HTTPException(status_code=400, detail="Metadata non cifrati")
 
         encrypted_body = payload_bytes[8 + header_encrypted_size:]
-        decrypted_payload = decifra_file_con_age(encrypted_body, candidates)
+        decrypted_payload = decifra_payload(encrypted_body, candidates)
         if not decrypted_payload: raise HTTPException(status_code=400, detail="Impossibile decifrare file")
 
         metadata_size = int.from_bytes(decrypted_payload[:4], byteorder='big')
