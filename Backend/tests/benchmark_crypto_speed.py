@@ -33,7 +33,7 @@ import tempfile
 import sys
 
 # Aggiunge il path della root del Backend per permettere le importazioni relative
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.crypto_service import genera_chiavi, cifra_payload, decifra_payload
 

@@ -34,29 +34,52 @@ def deriva_master_key(passphrase: str, salt: bytes):
 
 def cifra_vault(dinizionario, master_key):
     """
-    Cifra un dizionario Python (rappresentante un vault di chiavi/dati) in un blob crittografato.
+    Cifra un dizionario Python (rappresentante un vault di chiavi/dati) in un blob crittografato
+    utilizzando PyNaCl SecretBox (XSalsa20-Poly1305) per maggiore sicurezza rispetto a AES-CBC (Fernet).
     """
-    # Converte il dizionario in una stringa JSON
-    json_data = json.dumps(dinizionario)
-    f = Fernet(master_key)
-    # Cifra la stringa JSON codificata in bytes
-    blob_cifrato = f.encrypt(json_data.encode())
-    return blob_cifrato
+    json_data = json.dumps(dinizionario).encode('utf-8')
+    
+    # Extract the raw 32 bytes from the urlsafe base64 encoded master_key (Argon2id output)
+    raw_key = base64.urlsafe_b64decode(master_key)
+    
+    box = nacl.secret.SecretBox(raw_key)
+    nonce = nacl.utils.random(nacl.secret.SecretBox.NONCE_SIZE)
+    
+    encrypted = box.encrypt(json_data, nonce)
+    
+    # Restituiamo il formato unificato nonce + ciphertext codificato base64 per storage in SQLite
+    return base64.b64encode(nonce + encrypted.ciphertext).decode('utf-8')
 
 def decifra_vault(blob_cifrato, master_key):
     """
     Decifra un blob crittografato restituendo il dizionario (vault) originale.
+    Supporta il nuovo standard PyNaCl e implementa un fallback trasparente per legacy Vault `Fernet`.
     """
+    # 1. Tenta la decrittazione con PyNaCl (Nuovo Standard)
     try:
-        f = Fernet(master_key)
-        # Decifra e converte nuovamente da bytes a stringa
-        json_data = f.decrypt(blob_cifrato).decode()
-        return json.loads(json_data)
-    except Exception as e:
-        raise ValueError(f"Errore nella decifrazione del vault: {str(e)}")
+        raw_key = base64.urlsafe_b64decode(master_key)
+        box = nacl.secret.SecretBox(raw_key)
+        
+        raw_blob = base64.b64decode(blob_cifrato.encode() if isinstance(blob_cifrato, str) else blob_cifrato)
+        
+        # Estrai il nonce (primi 24 byte) e il testo cifrato
+        nonce = raw_blob[:nacl.secret.SecretBox.NONCE_SIZE]
+        ciphertext = raw_blob[nacl.secret.SecretBox.NONCE_SIZE:]
+        
+        decrypted_bytes = box.decrypt(ciphertext, nonce)
+        return json.loads(decrypted_bytes.decode('utf-8'))
+        
+    except (nacl.exceptions.CryptoError, ValueError, TypeError) as e:
+        # 2. Fallback alla decrittazione legacy Fernet (AES-CBC) per retrocompatibilità coi vecchi DB
+        try:
+            f = Fernet(master_key)
+            # Decifra e converte nuovamente da bytes a stringa
+            json_data = f.decrypt(blob_cifrato).decode('utf-8')
+            return json.loads(json_data)
+        except Exception as fallback_err:
+            raise ValueError(f"Errore critico nella decifrazione del vault (Sia PyNaCl che Fallback Fernet falliti)")
 
-
-def cifra_payload(plaintext: str | bytes, public_keys: list):
+def cifra_payload(plaintext: str | bytes, public_keys: list, force_no_chunking=False):
     """
     Cifra un testo o dei dati binari utilizzando lo scambio di chiavi ECDH (Curve25519) e la derivazione matematica tramite HKDF per generare le DEK in Envelope Encryption.
     """
@@ -126,20 +149,41 @@ def cifra_payload(plaintext: str | bytes, public_keys: list):
              
         # Cifratura finale del payload con la Master Message Key
         payload_box = nacl.secret.SecretBox(mmk)
-        nonce_payload = nacl.utils.random(nacl.secret.SecretBox.NONCE_SIZE)
-        encrypted_payload = payload_box.encrypt(plaintext, nonce_payload)
         
-        # Build Envelope compatibile 
-        envelope = {
-            "v": 3, # Version 3 HKDF-ECDH PyNaCl
-            "ephemeral_pub": ephemeral_sender_pub_b64,
-            "deks": encrypted_deks,
-            "data": base64.b64encode(encrypted_payload).decode('utf-8')
-        }
+        # LIGHTWEIGHT CHUNKING
+        CHUNK_SIZE = 1024 * 1024 # 1MB
+        
+        if len(plaintext) > CHUNK_SIZE and not force_no_chunking:
+            chunks = []
+            for i in range(0, len(plaintext), CHUNK_SIZE):
+                chunk_data = plaintext[i:i + CHUNK_SIZE]
+                nonce_payload = nacl.utils.random(nacl.secret.SecretBox.NONCE_SIZE)
+                encrypted_chunk = payload_box.encrypt(chunk_data, nonce_payload)
+                chunks.append(base64.b64encode(encrypted_chunk).decode('utf-8'))
+                
+            envelope = {
+                "v": 3, # Version 3 HKDF-ECDH PyNaCl
+                "ephemeral_pub": ephemeral_sender_pub_b64,
+                "deks": encrypted_deks,
+                "chunked": True,
+                "data": chunks
+            }
+        else:
+            nonce_payload = nacl.utils.random(nacl.secret.SecretBox.NONCE_SIZE)
+            encrypted_payload = payload_box.encrypt(plaintext, nonce_payload)
+            
+            # Build Envelope compatibile 
+            envelope = {
+                "v": 3, # Version 3 HKDF-ECDH PyNaCl
+                "ephemeral_pub": ephemeral_sender_pub_b64,
+                "deks": encrypted_deks,
+                "chunked": False,
+                "data": base64.b64encode(encrypted_payload).decode('utf-8')
+            }
         
         return base64.b64encode(json.dumps(envelope).encode()).decode()
-    except Exception as e:
-        print(f"Errore cifratura PyNaCl HKDF: {e}")
+    except Exception:
+        # Rimossa print() esplicita per prevenire Side-Channel Logs delle eccezioni crittografiche
         return None
 
 
@@ -159,7 +203,6 @@ def decifra_payload(ciphertext, candidate_privates):
             envelope = json.loads(input_bytes.decode('utf-8'))
             if envelope.get("v") == 3:
                 encrypted_deks = envelope.get("deks", [])
-                encrypted_data = base64.b64decode(envelope.get("data", ""))
                 ephemeral_pub_b64 = envelope.get("ephemeral_pub")
                 
                 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -208,7 +251,20 @@ def decifra_payload(ciphertext, candidate_privates):
                                     
                             if mmk:
                                 payload_box = nacl.secret.SecretBox(mmk)
-                                return payload_box.decrypt(encrypted_data)
+                                
+                                # Re-assembly of chunks
+                                is_chunked = envelope.get("chunked", False)
+                                if is_chunked:
+                                    chunks = envelope.get("data", [])
+                                    decrypted_full_bytes = b""
+                                    for enc_chunk_b64 in chunks:
+                                        enc_chunk_bytes = base64.b64decode(enc_chunk_b64)
+                                        decrypted_full_bytes += payload_box.decrypt(enc_chunk_bytes)
+                                    return decrypted_full_bytes
+                                else:
+                                    # Fallback standard legacy string / old v3 implementations
+                                    encrypted_data = base64.b64decode(envelope.get("data", ""))
+                                    return payload_box.decrypt(encrypted_data)
                         except Exception:
                             continue
             

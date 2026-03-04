@@ -1,7 +1,11 @@
+import sys
+import os
 import base64
 import json
-import sys
-sys.path.append("/home/matt/Uni/ChatControl/Backend")
+
+backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
 
 from services.crypto_service import genera_chiavi, cifra_payload, decifra_payload
 

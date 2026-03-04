@@ -30,7 +30,7 @@ import tracemalloc
 import sys
 
 # Aggiunge il root path del Backend per correttezza degli import
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.crypto_service import genera_chiavi, cifra_payload
 
