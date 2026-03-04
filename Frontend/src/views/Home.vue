@@ -445,8 +445,9 @@
                   this.file = null
                   this.$refs.fileInput.value = '';
                   this.loading = false
+                  const messages_to_load = Math.ceil(this.text.length / 4096)
+                  await this.fetchLatestMessages(messages_to_load)
                   this.text = ''
-                  await this.fetchLatestMessages(1)
                   this.scrollToBottom()
               }
             },

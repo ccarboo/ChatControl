@@ -16,7 +16,7 @@ from services.auth_service import login_cache
 from services.realtime_service import register_telethon_handlers
 from services.user_service import check_username_unicity
 
-cipher = Fernet(secret_key.encode())
+cipher = Fernet(secret_key.decode())
 signup_cache = {}
 
 def _build_and_store_vault(temp_data: dict, session_str: str, response: Response, client: TelegramClient, password_2fa: str | None = None):
@@ -31,13 +31,14 @@ def _build_and_store_vault(temp_data: dict, session_str: str, response: Response
         "api_id": temp_data['api_id'],
         "api_hash": temp_data['api_hash'],
         "username": temp_data['username_not_cyphered'],
-        "masterkey": masterkey_str,
-        "password": password_2fa,
         "session": session_str
     }
     
     # Cifra l'intero dizionario JSON col masterkey in modo che diventi un BLOB opaco non intellegibile a DB
     vault_cifrato = cifra_vault(da_cifrare, temp_data['masterkey_derived'])
+
+    # Re-inietta la masterkey nella copia RAM per le future operazioni
+    da_cifrare["masterkey"] = masterkey_str
 
     try:
         with get_connection() as conn:

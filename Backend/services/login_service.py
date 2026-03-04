@@ -25,11 +25,13 @@ async def login_user_logic(username_raw: str, password_raw: str, response: Respo
     temp_id_encrypted = cipher.encrypt(temp_id.encode()).decode()
     
     # Recupera i parametri dal vault locale dell'utente
-    vault_decyphered = get_user_informations(username, password_raw)
+    vault_decyphered, master_key = get_user_informations(username, password_raw)
     
     if 'chats' not in vault_decyphered:
         vault_decyphered['chats'] = {}
-    
+        
+    vault_decyphered['masterkey'] = master_key
+
     # Istanzia il client Telegram collegando la stringa di sessione salvata
     client = TelegramClient(
         StringSession(vault_decyphered['session']), 
@@ -74,7 +76,7 @@ async def login_user_logic(username_raw: str, password_raw: str, response: Respo
             await client.disconnect()
             raise HTTPException(status_code=500, detail=f"Errore invio SMS: {str(e)}")
 
-async def login_user_expired_logic(sms: str, login_session: str):
+async def login_user_expired_logic(sms: str, password: str, login_session: str):
     if not login_session:
         raise HTTPException(status_code=400, detail="Sessione non trovata")
     
@@ -99,13 +101,21 @@ async def login_user_expired_logic(sms: str, login_session: str):
         session_str = client.session.save()
     except SessionPasswordNeededError:
         try:
-            await client.sign_in(password=temp_data['data']['password'])
+            await client.sign_in(password=password)
             session_str = client.session.save()
         except Exception as e:
             raise HTTPException(status_code=401, detail=str(e))
             
     temp_data['data']['session'] = session_str
-    vault_ciphered = cifra_vault(temp_data['data'], temp_data['data']['masterkey'])
+    
+    # Rimuoviamo la masterkey ed eventulamente la password dai dati pronti al salvataggio
+    data_to_save = temp_data['data'].copy()
+    if 'masterkey' in data_to_save:
+        del data_to_save['masterkey']
+    if 'password' in data_to_save:
+        del data_to_save['password']
+        
+    vault_ciphered = cifra_vault(data_to_save, temp_data['data']['masterkey'])
     username = hashlib.sha256(pepper.encode() + temp_data['data']['username'].encode()).hexdigest()
     
     set_user_vault(username, vault_ciphered)

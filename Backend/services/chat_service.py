@@ -38,7 +38,7 @@ async def get_chats_logic(login_session: str, offset_date: str = None):
     async for dialog in client.iter_dialogs(limit=20, offset_date=dt):
         chat_info = {
             'id': dialog.id,
-            'name': dialog.name,
+            'name': dialog.name if dialog.name else "Account Eliminato",
             'unread_count': dialog.unread_count,
             'is_user': dialog.is_user,
             'is_group': dialog.is_group,

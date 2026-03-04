@@ -8,7 +8,7 @@
 			<ol>
 				<li>Per prima cosa bisogna avere un account Telegram attivo.</li>
 				<li>
-					Per seconda cosa bisogna andare a questo link https://my.telegram.org/auth.
+					Per seconda cosa bisogna andare a <a href="https://my.telegram.org/auth">questo link</a>.
 					<img src="/telegramApi.png" alt="Pagina di accesso a my.telegram.org" />
 				</li>
 				<li>

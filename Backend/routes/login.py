@@ -12,6 +12,7 @@ class LoginUser(BaseModel):
 
 class SmsCode(BaseModel):
     sms: str
+    password: str
 
 @router.post("/login")
 async def login_user(credentials: LoginUser, response: Response):
@@ -23,7 +24,7 @@ async def login_user(credentials: LoginUser, response: Response):
 async def login_user_expired(credentials: SmsCode, login_session: str = Cookie(None)):
     """Gestisce il login fallback con codice SMS per sessioni scadute."""
     # Invia il codice SMS a Telegram per ristabilire la sessione obsoleta
-    return await login_user_expired_logic(credentials.sms, login_session)
+    return await login_user_expired_logic(credentials.sms, credentials.password, login_session)
 
 @router.get("/login/check")
 async def login_check(login_session: str = Cookie(None)):

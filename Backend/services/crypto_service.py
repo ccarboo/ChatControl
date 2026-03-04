@@ -18,7 +18,7 @@ from core.config import secret_key, pepper
 from database.sqlite import get_connection
 
 # Inizializzazione della chiave segreta per Fernet utilizzando la secret_key dalla configurazione
-SECRET_KEY = secret_key.encode()
+SECRET_KEY = secret_key.decode()
 cipher = Fernet(SECRET_KEY)
 
 def deriva_master_key(passphrase: str, salt: bytes):

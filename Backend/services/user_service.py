@@ -18,7 +18,7 @@ def get_user_informations(username: str, password: str) -> dict:
             )
             risultati = cursor.fetchone()
             if risultati is None:
-                raise HTTPException(status_code=404, detail='username does not exist')
+                raise HTTPException(status_code=401)
     except sqlite3.Error as error:
         raise HTTPException(status_code=500, detail=str(error))
     
@@ -32,7 +32,7 @@ def get_user_informations(username: str, password: str) -> dict:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     
-    return vault_decyphered
+    return vault_decyphered, master_key
 
 def set_user_vault(username: str, vault_cyphered: bytes) -> None:
     """Aggiorna il master vault cifrato di un utente nel DB."""
@@ -59,7 +59,7 @@ def check_username_unicity(username: str) -> None:
             )
             risultati = cursor.fetchone()
             if risultati is not None:
-                raise HTTPException(status_code=409, detail='username already exists')
+                raise HTTPException(status_code=400)
     except sqlite3.Error as error:
         raise HTTPException(status_code=500, detail=str(error))
 

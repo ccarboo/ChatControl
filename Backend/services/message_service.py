@@ -319,7 +319,12 @@ async def send_public_key_logic(chat_id: int, login_session: str):
     }
 
     username = hashlib.sha256(pepper.encode() + data['data']['username'].encode()).hexdigest()
-    vault_cifrato = cifra_vault(data['data'], data['data']['masterkey'])
+    
+    data_to_save = data['data'].copy()
+    if 'masterkey' in data_to_save:
+        del data_to_save['masterkey']
+        
+    vault_cifrato = cifra_vault(data_to_save, data['data']['masterkey'])
     set_user_vault(username, vault_cifrato)
 
     message_payload = {

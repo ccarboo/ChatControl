@@ -11,6 +11,7 @@
                 expired: 0,
                 username: '',
                 password: '',
+                pass: '',
             }
         },
         methods: {
@@ -44,18 +45,21 @@
                 try {
                     response = await api.post('/login/expired', {
                         sms: this.sms,
+                        password: this.pass
                     }, { withCredentials: true })
                     console.log('Signup OK:', response.data)
                 } catch (e) {
                     this.errormsg = e.response?.data?.message || e.message
                 } finally {
                     this.loading = false
+                    this.sms = ''
+                    this.pass = ''
                     console.log('Response status:', response?.data?.status)
                     if (response?.data?.status == "logged in"){
                         this.$router.push('/home')
                     }
                     else{
-                        expired = 0
+                        this.expired = 0
                     }
                 }
             }
@@ -68,8 +72,8 @@
 <template>
     <div class="login-page">
         <div class="login-card">
-            <form @submit.prevent="login()">
-                <div v-show="expired == 0">
+            <form v-if="expired == 0" @submit.prevent="login()">
+                <div>
                     <div class="mb-3">
                         <label for="exampleInputEmail1" class="form-label">Username</label>
                         <input type="text" class="form-control" id="exampleInputEmail1" aria-describedby="emailHelp" v-model="username">
@@ -81,7 +85,7 @@
                 </div>
 
                 <button type="submit" class="btn btn-primary w-100">{{loading ? 'attendi...' : 'submit' }}</button>
-                <div v-show="expired == 0">
+                <div>
                     <p class="mt-3 text-center">
                         Non hai un account?
                         <RouterLink to="/signup">Registrati</RouterLink>
@@ -89,11 +93,13 @@
                 </div>
             </form>
 
-            <form @submit.prevent="login_expired()">
-                <div v-show="expired == 1">
+            <form v-else @submit.prevent="login_expired()">
+                <div>
                     <div class="mb-3">
                         <label for="exampleInputEmail1" class="form-label">SMS</label>
                         <input type="text" class="form-control" id="exampleInputEmail1" aria-describedby="emailHelp" v-model="sms">
+                        <label for="exampleInputEmail1" class="form-label">Password di Telegram</label>
+                        <input type="password" class="form-control" id="exampleInputEmail1" aria-describedby="emailHelp" v-model="pass">
                     </div>
                     <button type="submit" class="btn btn-primary w-100">{{loading ? 'attendi...' : 'submit' }}</button>
                 </div>

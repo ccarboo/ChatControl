@@ -3,7 +3,7 @@ from fastapi import Cookie, HTTPException
 from cryptography.fernet import Fernet
 from core.config import secret_key
 
-SECRET_KEY = secret_key.encode()
+SECRET_KEY = secret_key.decode()
 cipher = Fernet(SECRET_KEY)
 
 login_cache = {}
