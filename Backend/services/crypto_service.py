@@ -58,51 +58,88 @@ def decifra_vault(blob_cifrato, master_key):
 
 def cifra_payload(plaintext: str | bytes, public_keys: list):
     """
-    Cifra un testo o dei dati binari utilizzando PyNaCl con Envelope Encryption.
+    Cifra un testo o dei dati binari utilizzando lo scambio di chiavi ECDH (Curve25519) e la derivazione matematica tramite HKDF per generare le DEK in Envelope Encryption.
     """
     try:
-        dek = nacl.utils.random(nacl.secret.SecretBox.KEY_SIZE)
+        from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+        from cryptography.hazmat.primitives import hashes
+        import os
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
         
+        # Generiamo una chiave privata effimera per il sender senza chiamare il bloccante generate() in C su pyNaCl
+        ephemeral_sender_priv = X25519PrivateKey.from_private_bytes(os.urandom(32))
+        ephemeral_sender_pub_bytes = ephemeral_sender_priv.public_key().public_bytes_raw()
+        ephemeral_sender_pub_b64 = base64.b64encode(ephemeral_sender_pub_bytes).decode('utf-8')
+
         encrypted_deks = []
+                
+        # 1. Genera una Master Message Key casuale per il payload effettivo
+        mmk = nacl.utils.random(nacl.secret.SecretBox.KEY_SIZE)
+        
+        # 2. Cifra la MMK per ogni destinatario usando la sua "DEK Derivata via ECDH"
         for pk_b64 in public_keys:
-            try:
+             try:
                 pk_bytes = base64.b64decode(pk_b64)
-                pub_key = nacl.public.PublicKey(pk_bytes)
-                sealed_box = nacl.public.SealedBox(pub_key)
-                enc_dek = sealed_box.encrypt(dek)
-                encrypted_deks.append(base64.b64encode(enc_dek).decode('utf-8'))
-            except Exception:
-                continue
-        
+                # Costruisce la chiave pubblica dalla stringa 32byte di nacl
+                pub_key = X25519PublicKey.from_public_bytes(pk_bytes)
+                
+                # Calcolo ECDH sicuro
+                shared_key = ephemeral_sender_priv.exchange(pub_key)
+                
+                hkdf = HKDF(
+                    algorithm=hashes.SHA256(),
+                    length=nacl.secret.SecretBox.KEY_SIZE,
+                    salt=None,
+                    info=b"ChatControl Message DEK HKDF"
+                )
+                derived_dek = hkdf.derive(shared_key)
+                
+                # cifratura simmetrica della MMK con la derived_dek
+                # usiamo un nonce statico O random ma serializzato (es. tutti i 0) dato che 
+                # la derivata DEK è unica per (chiave pubblica eph, chiave pubblica dest)
+                dek_box = nacl.secret.SecretBox(derived_dek)
+                nonce_dek = nacl.utils.random(nacl.secret.SecretBox.NONCE_SIZE)
+                enc_mmk = dek_box.encrypt(mmk, nonce_dek)
+                
+                # Aggiungiamo il nonce ai dati inviati per permettere la decifratura
+                full_enc_mmk = nonce_dek + enc_mmk.ciphertext
+                encrypted_deks.append(base64.b64encode(full_enc_mmk).decode('utf-8'))
+             except Exception:
+                 continue
+                 
         if not encrypted_deks:
-            # Failsafe: se non ci sono chiavi PyNaCl, probabilmente stiamo usando vecchie chiavi 'age1...'
-            import subprocess
-            args = ['age']
-            for pk in public_keys:
-                args.extend(['-r', str(pk)])
-            input_data = plaintext.encode('utf-8') if isinstance(plaintext, str) else plaintext
-            try:
-                res = subprocess.run(args, input=input_data, capture_output=True, check=True)
-                return base64.b64encode(res.stdout).decode()
-            except Exception as ex:
-                print(f"Errore fallback age cifratura: {ex}")
-                return None
+             # Failsafe: age fallback
+             import subprocess
+             args = ['age']
+             for pk in public_keys:
+                 args.extend(['-r', str(pk)])
+             input_data = plaintext.encode('utf-8') if isinstance(plaintext, str) else plaintext
+             try:
+                 res = subprocess.run(args, input=input_data, capture_output=True, check=True)
+                 return base64.b64encode(res.stdout).decode()
+             except Exception as ex:
+                 print(f"Errore fallback age cifratura: {ex}")
+                 return None
+
         if isinstance(plaintext, str):
-            plaintext = plaintext.encode('utf-8')
-            
-        box = nacl.secret.SecretBox(dek)
-        nonce = nacl.utils.random(nacl.secret.SecretBox.NONCE_SIZE)
-        encrypted_payload = box.encrypt(plaintext, nonce)
+             plaintext = plaintext.encode('utf-8')
+             
+        # Cifratura finale del payload con la Master Message Key
+        payload_box = nacl.secret.SecretBox(mmk)
+        nonce_payload = nacl.utils.random(nacl.secret.SecretBox.NONCE_SIZE)
+        encrypted_payload = payload_box.encrypt(plaintext, nonce_payload)
         
+        # Build Envelope compatibile 
         envelope = {
-            "v": 2, # Version 2 per PyNaCl (v1 era age implicito)
+            "v": 3, # Version 3 HKDF-ECDH PyNaCl
+            "ephemeral_pub": ephemeral_sender_pub_b64,
             "deks": encrypted_deks,
             "data": base64.b64encode(encrypted_payload).decode('utf-8')
         }
         
         return base64.b64encode(json.dumps(envelope).encode()).decode()
     except Exception as e:
-        print(f"Errore cifratura PyNaCl: {e}")
+        print(f"Errore cifratura PyNaCl HKDF: {e}")
         return None
 
 
@@ -120,7 +157,62 @@ def decifra_payload(ciphertext, candidate_privates):
             
         try: # Prova JSON Envelope (PyNaCl)
             envelope = json.loads(input_bytes.decode('utf-8'))
-            if envelope.get("v") == 2:
+            if envelope.get("v") == 3:
+                encrypted_deks = envelope.get("deks", [])
+                encrypted_data = base64.b64decode(envelope.get("data", ""))
+                ephemeral_pub_b64 = envelope.get("ephemeral_pub")
+                
+                from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+                from cryptography.hazmat.primitives import hashes
+                import os
+                
+                if not ephemeral_pub_b64:
+                    pass # Fallback successivi
+                else:
+                    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+                    
+                    # Convertiamo l'ephemeral string in un oggetto PublicKey
+                    ephemeral_pub_bytes = base64.b64decode(ephemeral_pub_b64)
+                    ephemeral_pub_key = X25519PublicKey.from_public_bytes(ephemeral_pub_bytes)
+                    
+                    for priv_b64 in candidate_privates:
+                        try:
+                            priv_bytes = base64.b64decode(priv_b64)
+                            # Convertiamo i byte nacl della chiave privata candidata in oggetto Python Cryptography
+                            priv_key = X25519PrivateKey.from_private_bytes(priv_bytes)
+                            
+                            # Calcolo Secret Condiviso (lato ricevente) senza bloccarsi in C extension
+                            shared_key = priv_key.exchange(ephemeral_pub_key)
+                            
+                            hkdf = HKDF(
+                                algorithm=hashes.SHA256(),
+                                length=nacl.secret.SecretBox.KEY_SIZE,
+                                salt=None,
+                                info=b"ChatControl Message DEK HKDF"
+                            )
+                            derived_dek = hkdf.derive(shared_key)
+                            dek_box = nacl.secret.SecretBox(derived_dek)
+                            
+                            mmk = None
+                            for enc_mmk_b64 in encrypted_deks:
+                                try:
+                                    full_enc_mmk = base64.b64decode(enc_mmk_b64)
+                                    nonce_dek = full_enc_mmk[:nacl.secret.SecretBox.NONCE_SIZE]
+                                    ciphertext_mmk = full_enc_mmk[nacl.secret.SecretBox.NONCE_SIZE:]
+                                    
+                                    # decifriamo la Master Message Key
+                                    mmk = dek_box.decrypt(ciphertext_mmk, nonce_dek)
+                                    break
+                                except nacl.exceptions.CryptoError:
+                                    continue
+                                    
+                            if mmk:
+                                payload_box = nacl.secret.SecretBox(mmk)
+                                return payload_box.decrypt(encrypted_data)
+                        except Exception:
+                            continue
+            
+            elif envelope.get("v") == 2:
                 encrypted_deks = envelope.get("deks", [])
                 encrypted_data = base64.b64decode(envelope.get("data", ""))
                 
@@ -167,14 +259,17 @@ def decifra_payload(ciphertext, candidate_privates):
 
 def genera_chiavi():
     """
-    Genera una coppia di chiavi `PyNaCl` (Curve25519) (pubblica e privata).
+    Genera una coppia di chiavi `PyNaCl`/Curve25519 pubblica e privata bypassando il generatore bloccato C.
     """
     try:
-        private_key = nacl.public.PrivateKey.generate()
-        public_key = private_key.public_key
+        import os
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+        private_key = X25519PrivateKey.from_private_bytes(os.urandom(32))
+        public_key_bytes = private_key.public_key().public_bytes_raw()
+        private_key_bytes = private_key.private_bytes_raw()
         
-        pubblica = base64.b64encode(bytes(public_key)).decode('utf-8')
-        privata = base64.b64encode(bytes(private_key)).decode('utf-8')
+        pubblica = base64.b64encode(public_key_bytes).decode('utf-8')
+        privata = base64.b64encode(private_key_bytes).decode('utf-8')
         return pubblica, privata
     except Exception as e:
         print(f"Errore genera_chiavi PyNaCl: {e}")
