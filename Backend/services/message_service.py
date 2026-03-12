@@ -92,9 +92,12 @@ async def send_file_logic(chat_id: int, text: str, cryph: bool, group: bool, fil
                 shutil.copyfileobj(file.file, tmp)
                 tmp_path = tmp.name
 
+            from services.fast_telethon import upload_file
+            uploaded_file = await upload_file(client, tmp_path)
+            
             await client.send_file(
                 chat_id,
-                tmp_path,
+                uploaded_file,
                 caption=text,
                 force_document=True,
                 attributes=[DocumentAttributeFilename(filename)]
