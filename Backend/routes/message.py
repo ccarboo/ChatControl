@@ -35,13 +35,11 @@ async def send_file(
     file: UploadFile = File(...),
     login_session: str = Cookie(None)
 ):
-    """Invia un file multimediale, in chiaro o cifrato con age."""
-    # Legge interamente il file in memoria (idoneo per file di piccole/medie dimensioni)
-    file_bytes = await file.read()
-    # Passa i dati in binario e le info aggiuntive al service per crittografia (se attivata) e upload
+    """Invia un file multimediale, in chiaro o cifrato."""
+    # Passa i dati dell'UploadFile per permettere lo streaming in chunk (V1)
     return await send_file_logic(
         chat_id, text, cryph, group, 
-        file, file.filename, file.content_type, file_bytes,
+        file, file.filename, file.content_type,
         login_session
     )
 

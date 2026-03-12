@@ -603,3 +603,172 @@ def build_candidate_privates(chat_keys: dict, timestamp):
             candidate_privates.append(chiavi_storiche_sorted[0].get('privata'))
 
     return candidate_privates
+
+def cifra_payload_stream(input_generator, public_keys: list):
+    """
+    Cifra in streaming usando blocchi binari ed Envelope Encryption. (V1)
+    L'input deve essere un generatore che produce chunks (bytes).
+    Ritorna un generatore che produce l'header (con busta cifrata) e i vari chunk cifrati.
+    """
+    try:
+        from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+        from cryptography.hazmat.primitives import hashes
+        import os
+        from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+        
+        ephemeral_sender_priv = X25519PrivateKey.from_private_bytes(os.urandom(32))
+        ephemeral_sender_pub_bytes = ephemeral_sender_priv.public_key().public_bytes_raw()
+        ephemeral_sender_pub_b64 = base64.b64encode(ephemeral_sender_pub_bytes).decode('utf-8')
+
+        encrypted_deks = []
+        mmk = nacl.utils.random(nacl.secret.SecretBox.KEY_SIZE)
+        
+        for pk_b64 in public_keys:
+             try:
+                pk_bytes = base64.b64decode(pk_b64)
+                pub_key = X25519PublicKey.from_public_bytes(pk_bytes)
+                shared_key = ephemeral_sender_priv.exchange(pub_key)
+                hkdf = HKDF(algorithm=hashes.SHA256(), length=nacl.secret.SecretBox.KEY_SIZE, salt=None, info=b"ChatControl Message DEK HKDF")
+                derived_dek = hkdf.derive(shared_key)
+                dek_box = nacl.secret.SecretBox(derived_dek)
+                nonce_dek = nacl.utils.random(nacl.secret.SecretBox.NONCE_SIZE)
+                enc_mmk = dek_box.encrypt(mmk, nonce_dek)
+                full_enc_mmk = nonce_dek + enc_mmk.ciphertext
+                encrypted_deks.append(base64.b64encode(full_enc_mmk).decode('utf-8'))
+             except Exception:
+                 continue
+                 
+        if not encrypted_deks:
+             raise ValueError("Nessuna chiave pubblica valida per la cifratura.")
+
+        envelope = {
+            "v": 1,
+            "ephemeral_pub": ephemeral_sender_pub_b64,
+            "deks": encrypted_deks
+        }
+        envelope_bytes = json.dumps(envelope).encode('utf-8')
+        
+        header = b"CCV1" + len(envelope_bytes).to_bytes(4, byteorder='big') + envelope_bytes
+        yield header
+
+        payload_box = nacl.secret.SecretBox(mmk)
+        for chunk_data in input_generator:
+            if not chunk_data:
+                continue
+            nonce_payload = nacl.utils.random(nacl.secret.SecretBox.NONCE_SIZE)
+            encrypted_chunk = payload_box.encrypt(chunk_data, nonce_payload)
+            chunk_len = len(encrypted_chunk)
+            yield chunk_len.to_bytes(4, byteorder='big') + encrypted_chunk
+    except Exception as e:
+        print(f"Errore nella cifratura stream: {e}")
+        return
+
+async def _read_exact(iterator, n: int, buffer: bytearray):
+    is_async = hasattr(iterator, "__anext__")
+    while len(buffer) < n:
+        try:
+            if is_async:
+                chunk = await iterator.__anext__()
+            else:
+                chunk = next(iterator)
+            if not chunk:
+                break
+            buffer.extend(chunk)
+        except (StopAsyncIteration, StopIteration):
+            break
+    if len(buffer) < n:
+        return None
+    res = bytes(buffer[:n])
+    del buffer[:n]
+    return res
+
+async def decifra_payload_stream(async_iterator, candidate_privates: list):
+    """
+    Decifra uno stream crittografato formattato come V1.
+    Accetta in input un Async Generator (come iter_download di Telethon) o iteratore compatibile.
+    Ritorna un generatore asincrono (async yield) per i chunk in chiaro.
+    """
+    buffer = bytearray()
+    
+    magic = await _read_exact(async_iterator, 4, buffer)
+    if magic != b"CCV1":
+        raise ValueError("Il file non rispetta il formato V1 binario supportato per lo stream, o e' corrotto")
+        
+    env_len_bytes = await _read_exact(async_iterator, 4, buffer)
+    if not env_len_bytes:
+        raise ValueError("Stream terminato improvvisamente prima dell'envelope")
+    env_len = int.from_bytes(env_len_bytes, byteorder='big')
+    
+    envelope_bytes = await _read_exact(async_iterator, env_len, buffer)
+    if not envelope_bytes:
+        raise ValueError("Stream interrotto leggendo l'envelope")
+        
+    envelope = json.loads(envelope_bytes.decode('utf-8'))
+    encrypted_deks = envelope.get("deks", [])
+    ephemeral_pub_b64 = envelope.get("ephemeral_pub")
+    
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+    
+    ephemeral_pub_bytes = base64.b64decode(ephemeral_pub_b64)
+    ephemeral_pub_key = X25519PublicKey.from_public_bytes(ephemeral_pub_bytes)
+    
+    mmk = None
+    for priv_b64 in candidate_privates:
+        try:
+            priv_bytes = base64.b64decode(priv_b64)
+            priv_key = X25519PrivateKey.from_private_bytes(priv_bytes)
+            shared_key = priv_key.exchange(ephemeral_pub_key)
+            hkdf = HKDF(algorithm=hashes.SHA256(), length=nacl.secret.SecretBox.KEY_SIZE, salt=None, info=b"ChatControl Message DEK HKDF")
+            derived_dek = hkdf.derive(shared_key)
+            dek_box = nacl.secret.SecretBox(derived_dek)
+            
+            for enc_mmk_b64 in encrypted_deks:
+                try:
+                    full_enc_mmk = base64.b64decode(enc_mmk_b64)
+                    nonce_dek = full_enc_mmk[:nacl.secret.SecretBox.NONCE_SIZE]
+                    ciphertext_mmk = full_enc_mmk[nacl.secret.SecretBox.NONCE_SIZE:]
+                    mmk = dek_box.decrypt(ciphertext_mmk, nonce_dek)
+                    break
+                except nacl.exceptions.CryptoError:
+                    continue
+            if mmk: break
+        except Exception:
+            continue
+            
+    if not mmk:
+        raise ValueError("Impossibile decifrare il layer dell'envelope con le tue chiavi")
+        
+    payload_box = nacl.secret.SecretBox(mmk)
+    
+    while True:
+        chunk_len_bytes = await _read_exact(async_iterator, 4, buffer)
+        if not chunk_len_bytes:
+            break
+        chunk_len = int.from_bytes(chunk_len_bytes, byteorder='big')
+        
+        encrypted_chunk = await _read_exact(async_iterator, chunk_len, buffer)
+        if not encrypted_chunk:
+            break
+            
+        decrypted_chunk = payload_box.decrypt(encrypted_chunk)
+        yield decrypted_chunk
+
+async def estrai_metadata_da_stream_v1(async_iterator, candidate_privates: list):
+    """
+    Legge la prima parte di uno stream V1 per decifrare l'envelope ed estrarre il primo chunk
+    che contiene metadata_size (4 bytes) seguito dai metadata json in utf-8.
+    """
+    try:
+        decrypted_stream = decifra_payload_stream(async_iterator, candidate_privates)
+        first_chunk = await decrypted_stream.__anext__()
+        
+        if first_chunk and len(first_chunk) >= 4:
+            metadata_size = int.from_bytes(first_chunk[:4], byteorder='big')
+            if 0 < metadata_size <= len(first_chunk) - 4:
+                metadata_bytes = first_chunk[4:4 + metadata_size]
+                return metadata_bytes.decode('utf-8')
+    except Exception:
+        pass
+    return None

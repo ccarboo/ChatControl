@@ -16,7 +16,8 @@ from core.config import pepper
 from services.auth_service import is_logged_in
 from services.crypto_service import (
     cifra_payload, genera_chiavi, cifra_vault, 
-    get_chat_chyper_keys, get_group_chyper_keys
+    get_chat_chyper_keys, get_group_chyper_keys,
+    cifra_payload_stream
 )
 from services.telegram_service import split_message
 from services.user_service import set_user_vault
@@ -41,34 +42,19 @@ async def wait_for_public_key_message(client, chat_id: int, public_key: str, tim
 
 def _build_encrypted_payload(metadata: dict, file_content: bytes, recipient_keys: list) -> bytes:
     """
-    Impacchetta e cifra in formato raw `age` un blob binario composto da:
-    [4 byte int (L1)] | [L1 byte metadati JSON age-cifrato] | [File body crudo age-cifrato]
+    Costruisce il blob crittografato V1 in memoria per dati di piccole dimensioni.
     """
-    json_metadata = json.dumps(metadata, sort_keys=True)
-    metadata_bytes = json_metadata.encode('utf-8')
-    metadata_size = len(metadata_bytes)
-
-    encrypted_metadata = cifra_payload(metadata_bytes, recipient_keys)
-    if encrypted_metadata is None:
-        raise HTTPException(status_code=500, detail="Errore durante la cifratura dei metadati con age")
-
-    body_plain = metadata_size.to_bytes(4, byteorder='big') + metadata_bytes + file_content
-    encrypted_body = cifra_payload(body_plain, recipient_keys)
-    if encrypted_body is None:
-        raise HTTPException(status_code=500, detail="Errore durante la cifratura del corpo file con age")
-
-    if isinstance(encrypted_metadata, str):
-        encrypted_metadata = encrypted_metadata.encode('utf-8')
-    if isinstance(encrypted_body, str):
-        encrypted_body = encrypted_body.encode('utf-8')
-
-    payload = (
-        metadata_size.to_bytes(4, byteorder='big')
-        + len(encrypted_metadata).to_bytes(4, byteorder='big')
-        + encrypted_metadata
-        + encrypted_body
-    )
-    return payload
+    def _generator():
+        json_metadata = json.dumps(metadata, sort_keys=True)
+        metadata_bytes = json_metadata.encode('utf-8')
+        metadata_size = len(metadata_bytes)
+        yield metadata_size.to_bytes(4, byteorder='big') + metadata_bytes
+        yield file_content
+        
+    out = bytearray()
+    for chunk in cifra_payload_stream(_generator(), recipient_keys):
+        out.extend(chunk)
+    return bytes(out)
 
 async def delete_message_logic(chat_id: int, message_id: int, login_session: str):
     _, data = is_logged_in(login_session, True)
@@ -85,11 +71,12 @@ async def delete_message_logic(chat_id: int, message_id: int, login_session: str
     except Exception:
         raise HTTPException(status_code=502, detail="Non hai il permesso di cancellare questo messaggio")
 
-async def send_file_logic(chat_id: int, text: str, cryph: bool, group: bool, file, filename: str, content_type: str, file_bytes: bytes, login_session: str):
+async def send_file_logic(chat_id: int, text: str, cryph: bool, group: bool, file, filename: str, content_type: str, login_session: str):
     """
     Carica un file (e possibilmente una caption) verso Telegram.
-    Se 'cryph' è True, prima il blob viene manipolato da `_build_encrypted_payload` (vedi sopra) e inviato 
-    esclusivamente come formato Documento .dat generico, anonimizzando i media.
+    Sfrutta in streaming l'UploadFile per limitare la memoria.
+    Se 'cryph' è True, il file viene cifrato al volo e salvato localmente
+    come .dat e poi inviato.
     """
     _, data = is_logged_in(login_session, True)
     client = data['client']
@@ -101,7 +88,8 @@ async def send_file_logic(chat_id: int, text: str, cryph: bool, group: bool, fil
         try:
             ext = os.path.splitext(filename)[1]
             with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-                tmp.write(file_bytes)
+                file.file.seek(0)
+                shutil.copyfileobj(file.file, tmp)
                 tmp_path = tmp.name
 
             await client.send_file(
@@ -114,6 +102,8 @@ async def send_file_logic(chat_id: int, text: str, cryph: bool, group: bool, fil
             os.remove(tmp_path)
             return {"status": "ok"}
         except Exception as e:
+            if 'tmp_path' in locals() and os.path.exists(tmp_path):
+                os.remove(tmp_path)
             raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
 
     else:
@@ -123,32 +113,43 @@ async def send_file_logic(chat_id: int, text: str, cryph: bool, group: bool, fil
         recipient_keys = get_group_chyper_keys(data, chat_id) if group else get_chat_chyper_keys(data, chat_id)
         
         try:
-            file_content = file_bytes
             guessed_mime, _ = mimetypes.guess_type(filename)
             mime_type = guessed_mime or content_type or "application/octet-stream"
+
+            file.file.seek(0, 2)
+            file_size = file.file.tell()
+            file.file.seek(0)
 
             metadata = {
                 "filename": filename,
                 "cif": "file",
                 "text": text,
                 "mime": mime_type,
-                "size": len(file_content),
+                "size": file_size,
                 "timestamp": time.time(),
                 "id": id_message
             }
 
-            encrypted_payload = _build_encrypted_payload(metadata, file_content, recipient_keys)
-            
+            def _chunk_generator():
+                json_metadata = json.dumps(metadata, sort_keys=True)
+                metadata_bytes = json_metadata.encode('utf-8')
+                metadata_size = len(metadata_bytes)
+                yield metadata_size.to_bytes(4, byteorder='big') + metadata_bytes
+                
+                while True:
+                    chunk = file.file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+
             caption_dict = {"cif": "file"}
             caption_str = json.dumps(caption_dict)
             if len(caption_str) > CAPTION_LIMIT:
                 raise HTTPException(status_code=413, detail=f"caption troppo lunga ({len(caption_str)}>{CAPTION_LIMIT})")
 
             with tempfile.NamedTemporaryFile(delete=False, suffix=".dat") as tmp:
-                if isinstance(encrypted_payload, str):
-                    tmp.write(encrypted_payload.encode('utf-8'))
-                else:
-                    tmp.write(encrypted_payload)
+                for ciphered_chunk in cifra_payload_stream(_chunk_generator(), recipient_keys):
+                    tmp.write(ciphered_chunk)
                 tmp_path = tmp.name
 
             start_time = time.monotonic()
@@ -158,13 +159,15 @@ async def send_file_logic(chat_id: int, text: str, cryph: bool, group: bool, fil
                     raise Exception("Connessione troppo lenta")
 
             try:
+                from services.fast_telethon import upload_file
+                uploaded_file = await upload_file(client, tmp_path, progress_callback=progress_cb)
+                
                 await client.send_file(
                     chat_id,
-                    tmp_path,
+                    uploaded_file,
                     caption=caption_str,
                     force_document=True,
-                    attributes=[DocumentAttributeFilename(nome_file)],
-                    progress_callback=progress_cb
+                    attributes=[DocumentAttributeFilename(nome_file)]
                 )
             finally:
                 if os.path.exists(tmp_path):
@@ -175,7 +178,7 @@ async def send_file_logic(chat_id: int, text: str, cryph: bool, group: bool, fil
         except HTTPException:
             raise
         except Exception as e:
-            print(e)
+            traceback.print_exc()
             raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
 
 async def send_message_logic(chat_id: int, text: str, cryph: bool, group: bool, login_session: str):

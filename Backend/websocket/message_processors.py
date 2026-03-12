@@ -100,49 +100,67 @@ async def _process_document_payload(client, entity, event, message_data, parsed,
         message_data['error'] = "il messaggio dovrebbe contenere un documento, ma non e' presente"
         return message_data
 
-    file_bytes = io.BytesIO()
-    await client.download_media(full_message, file=file_bytes)
-    file_bytes.seek(0)
-    encrypted_payload = file_bytes.getvalue()
-
     timestamp = message_data.get('date')
     candidate_privates = build_candidate_privates(chat_keys, timestamp)
 
-    decrypted_payload = decifra_payload(encrypted_payload, candidate_privates)
+    from services.crypto_service import decifra_payload_stream
+    decrypted_stream = decifra_payload_stream(client.iter_download(full_message), candidate_privates)
    
-    if decrypted_payload and len(decrypted_payload) >= 4:
-        metadata_size = int.from_bytes(decrypted_payload[:4], byteorder='big')
-        if 0 < metadata_size <= len(decrypted_payload) - 4:
-            inner_metadata_bytes = decrypted_payload[4:4 + metadata_size]
-            message_bytes = decrypted_payload[4 + metadata_size:]
+    async def _read_exact(iterator, n: int, buffer: bytearray):
+        while len(buffer) < n:
             try:
-                inner_metadata_str = inner_metadata_bytes.decode('utf-8')
-                inner_metadata = json.loads(inner_metadata_str)
-            except Exception:
-                inner_metadata = None
+                chunk = await iterator.__anext__()
+                if not chunk: break
+                buffer.extend(chunk)
+            except StopAsyncIteration:
+                break
+        if len(buffer) < n: return None
+        res = bytes(buffer[:n])
+        del buffer[:n]
+        return res
 
-            if inner_metadata and inner_metadata.get('cif') == 'message':
-                tempo_decifrato = inner_metadata.get('timestamp')
-                id_message_decifrato = inner_metadata.get('id')
-                diff_seconds = None
-                if timestamp and tempo_decifrato is not None:
-                    try:
-                        diff_seconds = abs(timestamp.timestamp() - float(tempo_decifrato))
-                    except (TypeError, ValueError):
-                        diff_seconds = None
+    buffer = bytearray()
+    try:
+        metadata_size_bytes = await _read_exact(decrypted_stream, 4, buffer)
+        if metadata_size_bytes:
+            metadata_size = int.from_bytes(metadata_size_bytes, byteorder='big')
+            inner_metadata_bytes = await _read_exact(decrypted_stream, metadata_size, buffer)
+            
+            if inner_metadata_bytes:
+                try:
+                    inner_metadata_str = inner_metadata_bytes.decode('utf-8')
+                    inner_metadata = json.loads(inner_metadata_str)
+                except Exception:
+                    inner_metadata = None
 
-                if (diff_seconds is not None and diff_seconds > 10) or (id_message_decifrato in data['ids_']):
-                    message_data['error'] = "questo messaggio e' frutto di un replay attack"
-                else:
-                    message_data['text'] = message_bytes.decode('utf-8', errors='replace')
-                    data['ids_'].add(id_message_decifrato)
-                    message_data['secure'] = True
-                    message_data['file'] = False
-                    
-                    message_data.pop('media_type', None)
-                    message_data.pop('filename', None)
-                    message_data.pop('mime', None)
-                    message_data.pop('size', None)
+                if inner_metadata and inner_metadata.get('cif') == 'message':
+                    tempo_decifrato = inner_metadata.get('timestamp')
+                    id_message_decifrato = inner_metadata.get('id')
+                    diff_seconds = None
+                    if timestamp and tempo_decifrato is not None:
+                        try:
+                            diff_seconds = abs(timestamp.timestamp() - float(tempo_decifrato))
+                        except (TypeError, ValueError):
+                            diff_seconds = None
+
+                    if (diff_seconds is not None and diff_seconds > 10) or (id_message_decifrato in data['ids_']):
+                        message_data['error'] = "questo messaggio e' frutto di un replay attack"
+                    else:
+                        message_bytes = bytearray(buffer)
+                        async for chunk in decrypted_stream:
+                            message_bytes.extend(chunk)
+                            
+                        message_data['text'] = message_bytes.decode('utf-8', errors='replace')
+                        data['ids_'].add(id_message_decifrato)
+                        message_data['secure'] = True
+                        message_data['file'] = False
+                        
+                        message_data.pop('media_type', None)
+                        message_data.pop('filename', None)
+                        message_data.pop('mime', None)
+                        message_data.pop('size', None)
+    except Exception:
+        pass
 
     if 'json' in message_data:
         del message_data['json']
@@ -151,7 +169,6 @@ async def _process_document_payload(client, entity, event, message_data, parsed,
 
 async def _process_encrypted_file(client, entity, event, message_data, parsed, chat_keys, data):
     message_id = message_data.get('id')
-    header_encrypted_metadata = None
     
     if message_id:
         full_message = await client.get_messages(entity, ids=message_id)
@@ -171,19 +188,16 @@ async def _process_encrypted_file(client, entity, event, message_data, parsed, c
             message_data['file_head'] = base64.b64encode(file_head_bytes).decode()
             message_data['file_head_size'] = len(file_head_bytes)
 
-            if len(file_head_bytes) >= 8:
-                header_encrypted_size = int.from_bytes(file_head_bytes[4:8], byteorder='big')
-                if 0 < header_encrypted_size <= len(file_head_bytes) - 8:
-                    header_encrypted_metadata = file_head_bytes[8:8 + header_encrypted_size]
-
     timestamp = message_data.get('date')
     candidate_privates = build_candidate_privates(chat_keys, timestamp)
 
     text_decifrato = None
-    if header_encrypted_metadata:
-        text_decifrato = decifra_payload(header_encrypted_metadata, candidate_privates)
-        if text_decifrato:
-            text_decifrato = text_decifrato.decode() if isinstance(text_decifrato, bytes) else text_decifrato
+    if message_id and 'file_head_size' in message_data:
+        from services.crypto_service import estrai_metadata_da_stream_v1
+        async def _mem_stream():
+            yield file_head_bytes
+            
+        text_decifrato = await estrai_metadata_da_stream_v1(_mem_stream(), candidate_privates)
 
     if text_decifrato:
         try:

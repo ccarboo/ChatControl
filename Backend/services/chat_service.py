@@ -242,7 +242,7 @@ def _handle_encrypted_text(message: dict, data: dict, chat_keys: dict):
 
 async def _handle_encrypted_file(message: dict, client, entity, data: dict, chat_keys: dict):
     msg_id = message.get('id')
-    header_encrypted_metadata = None
+    file_head_bytes = None
 
     if msg_id:
         full_message = await client.get_messages(entity, ids=msg_id)
@@ -259,20 +259,18 @@ async def _handle_encrypted_file(message: dict, client, entity, data: dict, chat
             file_head_bytes = file_bytes.getvalue()
             message['file_head'] = base64.b64encode(file_head_bytes).decode()
             message['file_head_size'] = len(file_head_bytes)
-            
-            if len(file_head_bytes) >= 8:
-                header_encrypted_size = int.from_bytes(file_head_bytes[4:8], byteorder='big')
-                if 0 < header_encrypted_size <= len(file_head_bytes) - 8:
-                    header_encrypted_metadata = file_head_bytes[8:8 + header_encrypted_size]
 
     timestamp = message.get('date')
     candidates = build_candidate_privates(chat_keys, timestamp)
 
     text_dec = None
-    if header_encrypted_metadata:
-        text_dec = decifra_payload(header_encrypted_metadata, candidates)
-        if text_dec:
-            text_dec = text_dec.decode('utf-8') if isinstance(text_dec, bytes) else text_dec
+    if file_head_bytes:
+        from services.crypto_service import estrai_metadata_da_stream_v1
+        async def _mem_stream():
+            yield file_head_bytes
+            
+        text_dec = await estrai_metadata_da_stream_v1(_mem_stream(), candidates)
+
 
     if text_dec:
         try:
@@ -315,42 +313,63 @@ async def _handle_encrypted_document_payload(message: dict, client, entity, data
     if not full_message or not full_message.media or not full_message.document:
         return
 
-    file_bytes = io.BytesIO()
-    await client.download_media(full_message, file=file_bytes)
-    encrypted_payload = file_bytes.getvalue()
-
     timestamp = message.get('date')
     candidates = build_candidate_privates(chat_keys, timestamp)
-    decrypted_payload = decifra_payload(encrypted_payload, candidates)
-                    
-    if decrypted_payload and len(decrypted_payload) >= 4:
-        metadata_size = int.from_bytes(decrypted_payload[:4], byteorder='big')
-        if 0 < metadata_size <= len(decrypted_payload) - 4:
-            inner_metadata_bytes = decrypted_payload[4:4 + metadata_size]
-            message_bytes = decrypted_payload[4 + metadata_size:]
+
+    from services.crypto_service import decifra_payload_stream
+
+    decrypted_stream = decifra_payload_stream(client.iter_download(full_message), candidates)
+    
+    async def _read_exact(iterator, n: int, buffer: bytearray):
+        while len(buffer) < n:
             try:
-                inner_metadata = json.loads(inner_metadata_bytes.decode('utf-8'))
-            except Exception:
-                inner_metadata = None
+                chunk = await iterator.__anext__()
+                if not chunk: break
+                buffer.extend(chunk)
+            except StopAsyncIteration:
+                break
+        if len(buffer) < n: return None
+        res = bytes(buffer[:n])
+        del buffer[:n]
+        return res
+        
+    buffer = bytearray()
+    try:
+        metadata_size_bytes = await _read_exact(decrypted_stream, 4, buffer)
+        if metadata_size_bytes:
+            metadata_size = int.from_bytes(metadata_size_bytes, byteorder='big')
+            inner_metadata_bytes = await _read_exact(decrypted_stream, metadata_size, buffer)
+            
+            if inner_metadata_bytes:
+                try:
+                    inner_metadata = json.loads(inner_metadata_bytes.decode('utf-8'))
+                except Exception:
+                    inner_metadata = None
 
-            if inner_metadata and inner_metadata.get('cif') == 'message':
-                tempo_dec = inner_metadata.get('timestamp')
-                id_dec = inner_metadata.get('id')
-                diff_sec = abs(timestamp.timestamp() - float(tempo_dec)) if (timestamp and tempo_dec is not None) else None
+                if inner_metadata and inner_metadata.get('cif') == 'message':
+                    tempo_dec = inner_metadata.get('timestamp')
+                    id_dec = inner_metadata.get('id')
+                    diff_sec = abs(timestamp.timestamp() - float(tempo_dec)) if (timestamp and tempo_dec is not None) else None
 
-                if (diff_sec is not None and diff_sec > 10) or (id_dec in data['ids_']):
-                    message['error'] = "questo messaggio e' frutto di un replay attack"
-                else:
-                    message['text'] = message_bytes.decode('utf-8', errors='replace')
-                    data['ids_'].add(id_dec)
-                    message.update({
-                        'secure': True, 'file': False
-                    })
-                    for key in ['media_type', 'filename', 'mime', 'size']:
-                        message.pop(key, None)
+                    if (diff_sec is not None and diff_sec > 10) or (id_dec in data['ids_']):
+                        message['error'] = "questo messaggio e' frutto di un replay attack"
+                    else:
+                        # Raccogliamo il resto dello stream (che è il testo del messaggio)
+                        message_bytes = bytearray(buffer)
+                        async for chunk in decrypted_stream:
+                            message_bytes.extend(chunk)
+                            
+                        message['text'] = message_bytes.decode('utf-8', errors='replace')
+                        data['ids_'].add(id_dec)
+                        message.update({'secure': True, 'file': False})
+                        for key in ['media_type', 'filename', 'mime', 'size']:
+                            message.pop(key, None)
+    except Exception:
+        pass
 
     message['is_json'] = False
     message.pop('json', None)
+
 
 async def get_chat_messages_logic(chat_id: int, limit: int, start: int, login_session: str):
     temp_id, data = is_logged_in(login_session, False)
@@ -582,10 +601,6 @@ async def download_media_logic(chat_id: int, message_id: int, login_session: str
         if not message: raise HTTPException(status_code=404, detail="Messaggio non trovato")
         if not message.media: raise HTTPException(status_code=404, detail="Messaggio senza media")
         
-        file_bytes = io.BytesIO()
-        await client.download_media(message, file=file_bytes)
-        file_bytes.seek(0)
-        
         mime_type = 'application/octet-stream'
         if message.sticker: mime_type = message.sticker.mime_type or 'image/webp'
         elif message.gif: mime_type = message.gif.mime_type or 'video/mp4'
@@ -593,8 +608,12 @@ async def download_media_logic(chat_id: int, message_id: int, login_session: str
         elif message.video: mime_type = message.video.mime_type or 'video/mp4'
         elif message.document: mime_type = message.document.mime_type or 'application/octet-stream'
         
+        async def _stream_generator():
+            async for chunk in client.iter_download(message):
+                yield chunk
+
         return StreamingResponse(
-            iter([file_bytes.getvalue()]), media_type=mime_type,
+            _stream_generator(), media_type=mime_type,
             headers={'Cache-Control': 'public, max-age=31536000', 'ETag': f'"{chat_id}-{message_id}"'}
         )
     except HTTPException:
@@ -629,42 +648,76 @@ async def download_encrypt_media_logic(chat_id: int, message_id: int, login_sess
         candidates = build_candidate_privates(data['data'].get('chats', {}).get(chat_id_cif, {}), message.date)
         if not candidates: raise HTTPException(status_code=400, detail="Nessuna chiave")
 
-        file_bytes = io.BytesIO()
-        await client.download_media(message, file=file_bytes)
-        payload_bytes = file_bytes.getvalue()
-        if len(payload_bytes) < 8: raise HTTPException(status_code=400, detail="Payload invalido")
-
-        header_metadata_size = int.from_bytes(payload_bytes[:4], byteorder='big')
-        header_encrypted_size = int.from_bytes(payload_bytes[4:8], byteorder='big')
+        from services.crypto_service import decifra_payload_stream
+        from services.fast_telethon import download_file
+        import tempfile
+        import os
         
-        if header_encrypted_size <= 0 or header_encrypted_size > len(payload_bytes) - 8:
-            raise HTTPException(status_code=400, detail="Header invalido")
-
-        header_encrypted_metadata = payload_bytes[8:8 + header_encrypted_size]
-        decrypted_metadata_bytes = decifra_payload(header_encrypted_metadata, candidates)
-        if not decrypted_metadata_bytes: raise HTTPException(status_code=400, detail="Impossibile decifrare metadata")
-
-        outer_metadata = json.loads(decrypted_metadata_bytes.decode('utf-8'))
-        if outer_metadata.get('cif') != 'file': raise HTTPException(status_code=400, detail="Metadata non cifrati")
-
-        encrypted_body = payload_bytes[8 + header_encrypted_size:]
-        decrypted_payload = decifra_payload(encrypted_body, candidates)
-        if not decrypted_payload: raise HTTPException(status_code=400, detail="Impossibile decifrare file")
-
-        metadata_size = int.from_bytes(decrypted_payload[:4], byteorder='big')
-        inner_metadata_bytes = decrypted_payload[4:4 + metadata_size]
-        file_content = decrypted_payload[4 + metadata_size:]
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".dat")
+        os.close(tmp_fd)
         
-        inner_metadata = json.loads(inner_metadata_bytes.decode('utf-8'))
-        if inner_metadata != outer_metadata: raise HTTPException(status_code=409, detail="Mismatch")
+        await download_file(client, message.media.document, tmp_path, message.document.size)
+        
+        async def file_chunk_generator():
+            with open(tmp_path, "rb") as f:
+                while chunk := f.read(512 * 1024):
+                    yield chunk
+                    
+        decrypted_stream = decifra_payload_stream(file_chunk_generator(), candidates)
+        
+        async def _read_exact(iterator, n: int, buffer: bytearray):
+            while len(buffer) < n:
+                try:
+                    chunk = await iterator.__anext__()
+                    if not chunk: break
+                    buffer.extend(chunk)
+                except StopAsyncIteration:
+                    break
+            if len(buffer) < n: return None
+            res = bytes(buffer[:n])
+            del buffer[:n]
+            return res
+            
+        buffer = bytearray()
+        metadata_size_bytes = await _read_exact(decrypted_stream, 4, buffer)
+        if not metadata_size_bytes:
+            if os.path.exists(tmp_path): os.remove(tmp_path)
+            raise HTTPException(status_code=400, detail="Payload invalido o vuoto")
+            
+        metadata_size = int.from_bytes(metadata_size_bytes, byteorder='big')
+        metadata_bytes = await _read_exact(decrypted_stream, metadata_size, buffer)
+        
+        if not metadata_bytes:
+            if os.path.exists(tmp_path): os.remove(tmp_path)
+            raise HTTPException(status_code=400, detail="Metadati incompleti")
+            
+        metadata = json.loads(metadata_bytes.decode('utf-8'))
+        if metadata.get('cif') != 'file': 
+            if os.path.exists(tmp_path): os.remove(tmp_path)
+            raise HTTPException(status_code=400, detail="Metadata non cifrati o tipo errato")
 
-        out_filename = os.path.basename(inner_metadata.get('filename') or 'file.bin')
-        mime_type = inner_metadata.get('mime') or mimetypes.guess_type(out_filename)[0] or 'application/octet-stream'
+        out_filename = os.path.basename(metadata.get('filename') or 'file.bin')
+        mime_type = metadata.get('mime') or mimetypes.guess_type(out_filename)[0] or 'application/octet-stream'
+        
+        async def _file_stream_generator():
+            try:
+                if buffer:
+                    yield bytes(buffer)
+                async for chunk in decrypted_stream:
+                    yield chunk
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
 
+                yield bytes(buffer)
+            async for chunk in decrypted_stream:
+                yield chunk
+                
         return StreamingResponse(
-            iter([file_content]), media_type=mime_type,
+            _file_stream_generator(), media_type=mime_type,
             headers={'Content-Disposition': f'attachment; filename="{out_filename}"', 'Cache-Control': 'no-store'}
         )
+            
     except HTTPException:
         raise
     except Exception as e:
