@@ -24,7 +24,8 @@
                 loadingOlder: false,
                 hasMoreOlder: true,
                 lastChatsAt: 0,
-                  chatsInFlight: false,
+                chatsInFlight: false,
+                sending: false,				  // flag dedicato per invio messaggi (separato da loading)
                 dist : false,
                 ws: null,
                 wsChatId: null,
@@ -48,9 +49,7 @@
 
               ws.onmessage = (event) => {
                 try {
-                  console.log("[WS] Messaggio ricevuto raw:", event.data)
                   const payload = JSON.parse(event.data)
-                  console.log("[WS] Payload parsed:", payload)
                   this.handleChatEvent(payload)
                 } catch (e) {
                   console.error('[WS] Errore parsing evento WS:', e)
@@ -76,22 +75,12 @@
               }
             },
             handleChatEvent(payload) {
-              console.log("[WS] handleChatEvent chiamato con:", payload)
-              if (!payload || !this.selectedChat) {
-                console.log("[WS] handleChatEvent: payload o selectedChat mancante")
-                return
-              }
-              if (payload.chat_id !== this.selectedChat.id) {
-                console.log(`[WS] handleChatEvent: chat_id mismatch (payload: ${payload.chat_id}, selected: ${this.selectedChat.id})`)
-                return
-              }
+              if (!payload || !this.selectedChat) return
+              if (payload.chat_id !== this.selectedChat.id) return
+
               if (payload.event_type === 'new') {
-                console.log("[WS] handleChatEvent: event_type 'new'")
                 const message = payload.message
-                if (!message || !message.id) {
-                  console.log("[WS] handleChatEvent: message o id mancante")
-                  return false
-                }
+                if (!message || !message.id) return false
 
                 if (!message.chat_id) {
                   message.chat_id = payload.chat_id
@@ -100,30 +89,23 @@
                 const index = this.messaggi.findIndex((m) => m.id === message.id)
                 if (index === -1) {
                   this.messaggi = [...this.messaggi, message]
-                  return true
+                } else {
+                  const current = this.messaggi[index]
+                  this.messaggi.splice(index, 1, { ...current, ...message })
                 }
-
-                const current = this.messaggi[index]
-                this.messaggi.splice(index, 1, { ...current, ...message })
+                if (!this.dist) this.scrollToBottom()
                 return true
               }
               if (payload.event_type === 'edited') {
-                console.log("[WS] handleChatEvent: event_type 'edited'")
                 this.reloadEditedMessage(payload)
                 return
               }
               const changed = this.applyChatEvent(payload)
               if (!changed) {
-                console.log("[WS] handleChatEvent: nessun cambiamento, queueRealtimeReload")
                 this.queueRealtimeReload()
-                return
-              }
-              if (payload.event_type === 'new' && !this.dist) {
-                this.scrollToBottom()
               }
             },
             applyChatEvent(payload) {
-              console.log("el dio cane")
               const type = payload.event_type
               if (type === 'deleted') {
                 const ids = Array.isArray(payload.message_ids) ? payload.message_ids : []
@@ -159,7 +141,8 @@
                 clearTimeout(this.realtimeReloadTimer)
                 this.realtimeReloadTimer = null
               }
-              this.reload_chat(true, options)
+              // silent=true: non mostra lo spinner di loading durante reload WS
+              this.reload_chat(true, options, true)
             },
             setAnimatedStickerRef(messageId, el) {
               if (el) {
@@ -248,7 +231,6 @@
               this.selectedChat = chat
               this.loading = true
               this.startChatEvents(chat.id)
-              let response
 
               // Reset animated stickers quando cambi chat
               this.animatedStickerLoaded.clear()
@@ -257,47 +239,44 @@
               this.hasMoreOlder = true
               this.messaggi = []
 
-                try {
-                  response = await api.get(`/chats/${chat.id}/limit/${this.pageSize}/start/0`, { withCredentials: true })
-                  console.log('messaggi ricevuti:', response.data)
-                  this.messaggi = response.data.messages
-                  this.hasMoreOlder = (response.data.messages || []).length > 0
-                  
-                  await this.init_chat(chat)
-                  this.scrollToBottom()
-                  
-                  // Carica sticker animati dopo che il DOM è renderizzato
-                  this.$nextTick(() => {
-                    setTimeout(() => this.initAnimatedStickers(), 100)
-                  })
+              try {
+                const response = await api.get(`/chats/${chat.id}/limit/${this.pageSize}/start/0`, { withCredentials: true })
+                this.messaggi = response.data.messages
+                this.hasMoreOlder = (response.data.messages || []).length > 0
+
+                await this.init_chat(chat)
+                this.scrollToBottom()
+
+                // Carica sticker animati dopo che il DOM è renderizzato
+                this.$nextTick(() => {
+                  setTimeout(() => this.initAnimatedStickers(), 100)
+                })
               } catch (e) {
-                  this.errormsg = e.response?.data?.detail || e.message
-                  if(this.errormsg === "Sessione scaduta. Riesegui il login."){
-                    this.$router.push('/')
-                  }
+                this.errormsg = e.response?.data?.detail || e.message
+                if (this.errormsg === 'Sessione scaduta. Riesegui il login.') {
+                  this.$router.push('/')
+                }
               } finally {
-                  this.loading = false
+                this.loading = false
               }
             },
-            async reload_chat(force = false, options = null){
-              const now = Date.now()
-                this.loading = true
-              let response
-              let chat = this.selectedChat
+            // silent=true: non mostra lo spinner (usato da reload WS in background)
+            async reload_chat(force = false, options = null, silent = false){
+              if (!silent) this.loading = true
+              const chat = this.selectedChat
               const start = options?.start ?? 0
               const limit = options?.limit ?? this.pageSize
               try {
-                  response = await api.get(`/chats/${chat.id}/limit/${limit}/start/${start}`, { withCredentials: true })
-                  console.log('messaggi ricevuti:', response.data)
-                  this.mergeLatestMessages(response.data.messages)
+                const response = await api.get(`/chats/${chat.id}/limit/${limit}/start/${start}`, { withCredentials: true })
+                this.mergeLatestMessages(response.data.messages)
                 return response.data.messages || []
               } catch (e) {
-                  this.errormsg = e.response?.data?.detail || e.message
-                  if(this.errormsg === "Sessione scaduta. Riesegui il login."){
-                    this.$router.push('/')
-                  }
+                this.errormsg = e.response?.data?.detail || e.message
+                if (this.errormsg === 'Sessione scaduta. Riesegui il login.') {
+                  this.$router.push('/')
+                }
               } finally {
-                  this.loading = false
+                if (!silent) this.loading = false
               }
               return null
             },
@@ -399,56 +378,54 @@
               }
             },
             async sendMessage(){
-              if (!this.selectedChat) {
-                return
-              }
-              this.loading = true
+              if (!this.selectedChat) return
+              // Flag dedicato per il send — non interferisce con loading di get_chats/reload
+              if (this.sending) return
+              if (!this.file && !this.text.trim()) return
+
+              // Cattura i valori correnti e svuota subito l'input — UI snappy
+              const textToSend = this.text
+              const fileToSend = this.file
+              this.text = ''
+              this.file = null
+              this.$refs.fileInput.value = ''
+              this.sending = true
+
               try {
-                if(this.file && this.text){
-
+                if (fileToSend && textToSend) {
                   const formData = new FormData()
-                  formData.append('file',this.file)
-                  formData.append('text', this.text)
-                  formData.append('chat_id',this.selectedChat.id)
-                  formData.append('cryph',false)
-                  formData.append('group',this.selectedChat.is_group)
-                  await api.post('/messages/send/file', formData,
-                   { withCredentials: true })
-                  
-                }
-                else if(this.file && !this.text){
+                  formData.append('file', fileToSend)
+                  formData.append('text', textToSend)
+                  formData.append('chat_id', this.selectedChat.id)
+                  formData.append('cryph', false)
+                  formData.append('group', this.selectedChat.is_group)
+                  await api.post('/messages/send/file', formData, { withCredentials: true })
+                } else if (fileToSend) {
                   const formData = new FormData()
-                  formData.append('file',this.file)
-                  formData.append('text', '')
-                  formData.append('chat_id',this.selectedChat.id)
-                  formData.append('cryph',false)
-                  formData.append('group',this.selectedChat.is_group)
-
-                  await api.post('/messages/send/file', formData,
-                   { withCredentials: true })
-                }
-                else if(this.text.trim().length !== 0){
+                  formData.append('file', fileToSend)
+                  formData.append('text', textToSend || '')
+                  formData.append('chat_id', this.selectedChat.id)
+                  formData.append('cryph', false)
+                  formData.append('group', this.selectedChat.is_group)
+                  await api.post('/messages/send/file', formData, { withCredentials: true })
+                } else if (textToSend.trim().length !== 0) {
                   await api.post('/messages/send', {
-                    text: this.text,
+                    text: textToSend,
                     chat_id: this.selectedChat.id,
                     cryph: false,
                     group: this.selectedChat.is_group
                   }, { withCredentials: true })
-                  
                 }
               } catch (e) {
-                  this.errormsg = e.response?.data?.detail || e.message
-                  if(this.errormsg === "Sessione scaduta. Riesegui il login."){
-                    this.$router.push('/')
-                  }
+                this.errormsg = e.response?.data?.detail || e.message
+                if (this.errormsg === 'Sessione scaduta. Riesegui il login.') {
+                  this.$router.push('/')
+                }
               } finally {
-                  this.file = null
-                  this.$refs.fileInput.value = '';
-                  this.loading = false
-                  const messages_to_load = Math.ceil(this.text.length / 4096)
-                  await this.fetchLatestMessages(messages_to_load)
-                  this.text = ''
-                  this.scrollToBottom()
+                this.sending = false
+                const messages_to_load = Math.ceil(textToSend.length / 4096) || 1
+                await this.fetchLatestMessages(messages_to_load)
+                this.scrollToBottom()
               }
             },
             async handleSubmit(){
@@ -459,78 +436,42 @@
               }
             },
             async sendChyp(){
-              if (!this.selectedChat) {
-                return
-              }
-              if (this.loading || !this.text.trim()) return;
+              if (!this.selectedChat) return
+              // Blocca double-submit, ma permette file senza testo
+              if (this.sending) return
+              if (!this.file && !this.text.trim()) return
 
-              this.loading = true
-              if (!this.file && this.text.trim().length !== 0){
-                try {
-                    await api.post('/messages/send', {
-                      text: this.text,
-                      chat_id: this.selectedChat.id,
-                      cryph: true,
-                      group: this.selectedChat.is_group
-                    }, { withCredentials: true })
-                    this.text = ''
-                    await this.fetchLatestMessages(1)
-                    this.scrollToBottom()
-                } catch (e) {
-                    this.errormsg = e.response?.data?.message || e.message
-                } finally {
-                    this.loading = false
-                }
-              }
-              else{
-                if(this.file && this.text){
+              // Svuota subito l'input — UI snappy
+              const textToSend = this.text
+              const fileToSend = this.file
+              this.text = ''
+              this.file = null
+              this.$refs.fileInput.value = ''
+              this.sending = true
 
+              try {
+                if (fileToSend) {
                   const formData = new FormData()
-                  formData.append('file',this.file)
-                  formData.append('text', this.text)
-                  formData.append('chat_id',this.selectedChat.id)
-                  formData.append('cryph',true)
-                  formData.append('group',this.selectedChat.is_group)
-                  try{
-                    await api.post('/messages/send/file', formData,
-                    { withCredentials: true })
-                  }
-                  catch(e){
-                    this.errormsg = e.response?.data?.message || e.message
-                  }
-                  finally{
-                    this.file = null
-                    this.$refs.fileInput.value = '';
-                    this.loading = false
-                    this.text = ''
-                    await this.fetchLatestMessages(1)
-                    this.scrollToBottom()
-                  }
+                  formData.append('file', fileToSend)
+                  formData.append('text', textToSend || '')
+                  formData.append('chat_id', this.selectedChat.id)
+                  formData.append('cryph', true)
+                  formData.append('group', this.selectedChat.is_group)
+                  await api.post('/messages/send/file', formData, { withCredentials: true })
+                } else if (textToSend.trim().length !== 0) {
+                  await api.post('/messages/send', {
+                    text: textToSend,
+                    chat_id: this.selectedChat.id,
+                    cryph: true,
+                    group: this.selectedChat.is_group
+                  }, { withCredentials: true })
                 }
-                else if(this.file && !this.text){
-
-                  const formData = new FormData()
-                  formData.append('file',this.file)
-                  formData.append('text', "")
-                  formData.append('chat_id',this.selectedChat.id)
-                  formData.append('cryph',true)
-                  formData.append('group',this.selectedChat.is_group)
-                  try{
-                    await api.post('/messages/send/file', formData,
-                    { withCredentials: true })
-                  }
-                  catch(e){
-                    this.errormsg = e.response?.data?.message || e.message
-                  }
-                  finally{
-                    this.file = null
-                    this.$refs.fileInput.value = '';
-                    this.loading = false
-                    this.text = ''
-                    await this.fetchLatestMessages(1)
-                    this.scrollToBottom()
-                  }
-                }
+              } catch (e) {
+                this.errormsg = e.response?.data?.message || e.message
+              } finally {
+                this.sending = false
+                await this.fetchLatestMessages(1)
+                this.scrollToBottom()
               }
             },
             async sendkey(){
@@ -550,15 +491,13 @@
               }
             },
             async init_chat(chat){
-              let response
               try {
-                  response = await api.get(`/chats/${chat.id}/inits`, { withCredentials: true })
-                  console.log('init chat:', response.data)
+                await api.get(`/chats/${chat.id}/inits`, { withCredentials: true })
               } catch (e) {
-                  this.errormsg = e.response?.data?.detail || e.message
-                  if(this.errormsg === "Sessione scaduta. Riesegui il login."){
-                    this.$router.push('/')
-                  }
+                this.errormsg = e.response?.data?.detail || e.message
+                if (this.errormsg === 'Sessione scaduta. Riesegui il login.') {
+                  this.$router.push('/')
+                }
               }
             },
             scrollToBottom() {
@@ -570,19 +509,23 @@
               })
             },
             handleMessagesScroll() {
-              if (this.contextMenuVisible) {
-                this.closeMessageMenu()
-              }
-              const messagesDiv = this.$refs.messagesContainer
-              if (!messagesDiv || this.messaggi.length === 0) return
+              // Throttle via requestAnimationFrame per evitare layout thrashing
+              if (this._scrollRafPending) return
+              this._scrollRafPending = true
+              requestAnimationFrame(() => {
+                this._scrollRafPending = false
+                if (this.contextMenuVisible) {
+                  this.closeMessageMenu()
+                }
+                const messagesDiv = this.$refs.messagesContainer
+                if (!messagesDiv || this.messaggi.length === 0) return
 
-              const threshold = 8
-
-              const distanceFromBottom = messagesDiv.scrollHeight - (messagesDiv.scrollTop + messagesDiv.clientHeight)
-              this.dist = distanceFromBottom > 200
-              if (messagesDiv.scrollTop <= threshold) {
-                this.loadOlderMessages()
-              }
+                const distanceFromBottom = messagesDiv.scrollHeight - (messagesDiv.scrollTop + messagesDiv.clientHeight)
+                this.dist = distanceFromBottom > 200
+                if (messagesDiv.scrollTop <= 8) {
+                  this.loadOlderMessages()
+                }
+              })
             },
             formatFileSize(bytes) {
               if (!bytes) return '0 B'
@@ -751,12 +694,24 @@
               }
             },
         },
+        computed: {
+          // Pre-calcola il timestamp formattato per ogni messaggio
+          // evitando che new Date().toLocaleTimeString() venga eseguito
+          // inline nel v-for ad ogni render
+          formattedMessages() {
+            return this.messaggi.map((m) => ({
+              ...m,
+              _timeStr: m.date
+                ? new Date(m.date).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })
+                : ''
+            }))
+          }
+        },
         watch: {
-          messaggi: {
-            handler() {
-              this.$nextTick(() => this.initAnimatedStickers())
-            },
-            deep: true
+          // shallow watch: si triggera solo quando viene sostituito l'intero array,
+          // non ad ogni modifica interna (deep:true era inutilmente costoso)
+          messaggi() {
+            this.$nextTick(() => this.initAnimatedStickers())
           }
         },
         mounted() {
@@ -859,7 +814,7 @@
           <div class="messages-area flex-grow-1">
           <div ref="messagesContainer" class="messages-scroll p-3 bg-chat" @scroll="handleMessagesScroll">
              <div 
-               v-for="m in messaggi" 
+               v-for="m in formattedMessages" 
                :key="m.id" 
                class="message-wrapper"
                :class="{ 'message-out': m.out, 'message-in': !m.out, 'message-system': !!m.chiave, 'message-system-type': !!m.system_type}"
@@ -964,7 +919,7 @@
                   >
                   </div>
                  <div class="message-time">
-                   {{ new Date(m.date).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }) }}
+                   {{ m._timeStr }}
                  </div>
                  </template>
                </div> 

@@ -80,15 +80,5 @@ def run_vault_benchmark():
     print(f"Cifratura   : {new_time_enc:.2f} ms | Picco RAM: {peak_enc_new/1024:.2f} KB | Size Output: {new_size/1024:.2f} KB")
     print(f"Decifratura : {new_time_dec:.2f} ms | Picco RAM: {peak_dec_new/1024:.2f} KB")
 
-    # --- TEST 3: COMPATIBILITÀ RETROATTIVA ---
-    print("\n--- TEST FALLBACK RETROATTIVITÀ ---")
-    start_t = time.perf_counter()
-    risultato_fallback = decifra_vault(old_blob, master_key_b64)
-    t_fallback = (time.perf_counter() - start_t) * 1000
-    if risultato_fallback.get('user_id') == 999123:
-        print(f"✅ Passato: Il nuovo sistema decifra correttamente i vecchi salvataggi AES! ({t_fallback:.2f} ms)")
-    else:
-        print("❌ Errore critico nel fallback retroattivo.")
-
 if __name__ == "__main__":
     run_vault_benchmark()

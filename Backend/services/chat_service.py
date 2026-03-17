@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from core.config import pepper
 from services.crypto_service import (
     cifra_vault, is_valid_public_key, store_public_key_in_vault,
-    decifra_payload, build_candidate_privates
+    decifra_payload
 )
 from services.auth_service import is_logged_in
 from services.telegram_service import is_group_chat_id, set_media
@@ -169,7 +169,8 @@ def _populate_decrypted_ids(messages_in_window: list, data: dict, chat_keys: dic
             if not id_message:
                 continue
 
-            candidate_privates = build_candidate_privates(chat_keys, message.get('date'))
+            priv = chat_keys.get('chiave', {}).get('privata')
+            candidate_privates = [priv] if priv else []
             if not candidate_privates:
                 continue
 
@@ -207,7 +208,8 @@ def _handle_encrypted_text(message: dict, data: dict, chat_keys: dict):
     timestamp = message.get('date')
     id_enc = message['json'].get('id')
 
-    candidates = build_candidate_privates(chat_keys, timestamp)
+    priv = chat_keys.get('chiave', {}).get('privata')
+    candidates = [priv] if priv else []
     text_dec = decifra_payload(text_enc, candidates)
     if text_dec:
         text_dec = text_dec.decode('utf-8') if isinstance(text_dec, bytes) else text_dec
@@ -261,15 +263,16 @@ async def _handle_encrypted_file(message: dict, client, entity, data: dict, chat
             message['file_head_size'] = len(file_head_bytes)
 
     timestamp = message.get('date')
-    candidates = build_candidate_privates(chat_keys, timestamp)
+    priv = chat_keys.get('chiave', {}).get('privata')
+    candidates = [priv] if priv else []
 
     text_dec = None
     if file_head_bytes:
-        from services.crypto_service import estrai_metadata_da_stream_v1
+        from services.crypto_service import estrai_metadata_da_stream
         async def _mem_stream():
             yield file_head_bytes
             
-        text_dec = await estrai_metadata_da_stream_v1(_mem_stream(), candidates)
+        text_dec = await estrai_metadata_da_stream(_mem_stream(), candidates)
 
 
     if text_dec:
@@ -314,7 +317,8 @@ async def _handle_encrypted_document_payload(message: dict, client, entity, data
         return
 
     timestamp = message.get('date')
-    candidates = build_candidate_privates(chat_keys, timestamp)
+    priv = chat_keys.get('chiave', {}).get('privata')
+    candidates = [priv] if priv else []
 
     from services.crypto_service import decifra_payload_stream
 
@@ -645,7 +649,9 @@ async def download_encrypt_media_logic(chat_id: int, message_id: int, login_sess
             raise HTTPException(status_code=400, detail="Caption non cifrata")
 
         chat_id_cif = hashlib.sha256(pepper.encode() + str(chat_id).encode()).hexdigest()
-        candidates = build_candidate_privates(data['data'].get('chats', {}).get(chat_id_cif, {}), message.date)
+        chat_keys = data['data'].get('chats', {}).get(chat_id_cif, {})
+        priv = chat_keys.get('chiave', {}).get('privata')
+        candidates = [priv] if priv else []
         if not candidates: raise HTTPException(status_code=400, detail="Nessuna chiave")
 
         from services.crypto_service import decifra_payload_stream

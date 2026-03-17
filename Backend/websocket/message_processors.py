@@ -7,7 +7,7 @@ from core.config import pepper
 from services.auth_service import get_user_data_by_temp_id
 from services.telegram_service import is_group_chat_id
 from services.crypto_service import (
-    is_valid_public_key, store_public_key_in_vault, build_candidate_privates, decifra_payload
+    is_valid_public_key, store_public_key_in_vault, decifra_payload
 )
 
 async def _process_key_exchange(temp_id, event, message_data, parsed):
@@ -46,8 +46,9 @@ async def _process_text_message(event, message_data, parsed, chat_keys, data):
     id_message_encrypted = message_data['json'].get('id')
     timestamp = message_data.get('date')
 
-    # Identifica le chiavi private idonee alla decifrazione in funzione del timestamp temporale
-    candidate_privates = build_candidate_privates(chat_keys, timestamp)
+    # Usa la chiave privata corrente (nessuna retroattività)
+    priv = chat_keys.get('chiave', {}).get('privata')
+    candidate_privates = [priv] if priv else []
 
     # Tenta la decifratura asimmetrica passando come input le stringhe in base64
     text_decifrato = decifra_payload(text_encrypted, candidate_privates)
@@ -101,7 +102,8 @@ async def _process_document_payload(client, entity, event, message_data, parsed,
         return message_data
 
     timestamp = message_data.get('date')
-    candidate_privates = build_candidate_privates(chat_keys, timestamp)
+    priv = chat_keys.get('chiave', {}).get('privata')
+    candidate_privates = [priv] if priv else []
 
     from services.crypto_service import decifra_payload_stream
     decrypted_stream = decifra_payload_stream(client.iter_download(full_message), candidate_privates)
@@ -189,15 +191,16 @@ async def _process_encrypted_file(client, entity, event, message_data, parsed, c
             message_data['file_head_size'] = len(file_head_bytes)
 
     timestamp = message_data.get('date')
-    candidate_privates = build_candidate_privates(chat_keys, timestamp)
+    priv = chat_keys.get('chiave', {}).get('privata')
+    candidate_privates = [priv] if priv else []
 
     text_decifrato = None
     if message_id and 'file_head_size' in message_data:
-        from services.crypto_service import estrai_metadata_da_stream_v1
+        from services.crypto_service import estrai_metadata_da_stream
         async def _mem_stream():
             yield file_head_bytes
             
-        text_decifrato = await estrai_metadata_da_stream_v1(_mem_stream(), candidate_privates)
+        text_decifrato = await estrai_metadata_da_stream(_mem_stream(), candidate_privates)
 
     if text_decifrato:
         try:
