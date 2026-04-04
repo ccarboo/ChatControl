@@ -23,10 +23,23 @@ sudo apt update
 sudo apt install age openssl python3-pip python3-venv
 ```
 
-I requisiti python verranno gestiti dall'ambiente virtuale `.venv` (es. `fastapi`, `uvicorn`, `telethon` e `cryptography`).
+I requisiti Python sono delineati nel file `requirements.txt` fornito nella root del progetto.
 
-### 2. Setup dell'Ambiente
-Crea un file `.env` nella directory `ChatControl/Backend/` configurando i segreti per l'hashing anonimizzato e la criptazione simmetrica:
+### 2. Setup dell'Ambiente e Installazione
+Prima di tutto, crea l'ambiente virtuale (`.venv`), attivalo e installa tutti i pacchetti Python richiesti. Questo passaggio installerà librerie centrali per l'API (come FastAPI, uvicorn, python-dotenv) e per la logica crittografica/proxy (Telethon, Cryptography, PyNaCl):
+
+```bash
+# Crea l'ambiente virtuale (eseguire dalla root del progetto)
+python3 -m venv .venv
+
+# Attiva l'ambiente virtuale
+source .venv/bin/activate
+
+# Installa le dipendenze
+pip install -r requirements.txt
+```
+
+Successivamente, crea un file `.env` nella directory `ChatControl/Backend/` configurando i segreti per l'hashing anonimizzato e la criptazione simmetrica del Data Vault SQLite:
 
 ```env
 SECRET_PEPPER=9ed4ecb784384de16c2dc5be86818e0b36db355438acd616a45367f50ffca648c4e5793f4b2e3711093b91b54720fb0dc81d11dbed4ceb8c006cdadd5a8efb5d
@@ -64,3 +77,24 @@ npm run dev
 ```
 
 ---
+
+### 6. Esecuzione dei Test
+Il progetto include una suite di script di test e benchmark all'interno della directory `Backend/tests`. Questi strumenti sono fondamentali per verificare che gli algoritmi crittografici (KX basato su X25519, HKDF) siano integrati bene e che i vault SQLite siano robusti.
+
+Assicurati che l'ambiente virtuale sia attivo ed esegui i moduli dalla directory del Backend in modo da accedere correttamente ai path (es. `services`, `core`):
+
+```bash
+# 1. Torna (o assicurati di essere) nel Backend e di avere .venv attivato
+source .venv/bin/activate
+cd Backend/tests
+
+# 2. Lancia il benchmark unificato per crittografia payload stream e stringhe
+python3 -m tests.unified_benchmark
+
+# 3. Lancia il test e benchmark su decifratura/cifratura del vault locale
+python3 -m tests.benchmark_vault
+```
+
+---
+
+
