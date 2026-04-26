@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from database import sqlite as db_setup
 from routes import router as api_router
+from routes.media import router as media_router
 from fastapi.middleware.cors import CORSMiddleware
 
 
@@ -28,6 +29,7 @@ app.add_middleware(
 
 # Registra il router principale (raccoglie tutti i sotto-router da routes/)
 app.include_router(api_router)
+app.include_router(media_router)
 # Initialize database on backend startup
 @app.on_event("startup")
 async def startup_event():

@@ -15,50 +15,27 @@ def is_group_chat_id(chat_id: int) -> bool:
     except Exception:
         return False
 
+# Modifica in Backend/services/telegram_service.py
+
 def set_media(msg, message_data):
-    """Estrae e normalizza in un dizionario custom le info sui file multimediali nativi (foto, video, document, sticker, gif) pescati dai messaggi Telegram."""
-    message_data['file'] = True
-            
-    # Controlla PRIMA sticker e gif (altrimenti finiscono come documenti)
-    if msg.sticker:
-        document = msg.sticker
-        is_animated = any(
-            isinstance(attr, DocumentAttributeAnimated)
-            for attr in (document.attributes or [])
-        )
-        mime = document.mime_type or 'image/webp'
-        if is_animated or mime in ('application/x-tgsticker', 'video/webm'):
-            message_data['media_type'] = 'sticker_animated'
-        else:
-            message_data['media_type'] = 'sticker'
-        message_data['size'] = document.size
-        message_data['mime'] = mime
-    
-    elif msg.gif:
-        message_data['media_type'] = 'gif'
-        message_data['size'] = msg.gif.size
-        message_data['mime'] = msg.gif.mime_type or 'video/mp4'
-    
-    # Documenti generici
-    elif msg.document:
-        document = msg.document
-        message_data['media_type'] = 'document'
-        message_data['filename'] = None
-        message_data['mime'] = document.mime_type or 'application/octet-stream'
-        message_data['size'] = document.size or 0
+    if message_data is None:
+        return # Evita il crash se message_data è None
         
-        for attr in (document.attributes or []):
-            if hasattr(attr, 'file_name'):
-                message_data['filename'] = attr.file_name
-                break
+    message_data['file'] = True
     
-    # Foto
-    elif msg.photo:
+    # Se è una foto o un documento, gestiamo i casi
+    if hasattr(msg, 'photo') and msg.photo:
         message_data['media_type'] = 'photo'
-        message_data['size'] = msg.photo.size if hasattr(msg.photo, 'size') else 0
-    
-    # Video
-    elif msg.video:
-        message_data['media_type'] = 'video'
-        message_data['size'] = msg.video.size if hasattr(msg.video, 'size') else 0
-        message_data['mime'] = msg.video.mime_type if hasattr(msg.video, 'mime_type') else 'video/mp4'
+        message_data['mime'] = 'image/jpeg'
+    elif hasattr(msg, 'document') and msg.document:
+        mime = msg.document.mime_type or ''
+        # Se è crittografato, potremmo non avere il MIME subito
+        if mime.startswith('image/'):
+            message_data['media_type'] = 'photo'
+        else:
+            message_data['media_type'] = 'document'
+        message_data['mime'] = mime
+    else:
+        # Fallback per messaggi crittografati o strani
+        message_data['media_type'] = 'document'
+        message_data['mime'] = 'application/octet-stream'
