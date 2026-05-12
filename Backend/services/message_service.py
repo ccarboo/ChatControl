@@ -344,3 +344,30 @@ async def send_public_key_logic(chat_id: int, login_session: str):
         raise HTTPException(status_code=502, detail=f"Invio fallito: {e}")
     
     return {"status": "ok", "public": pubblica}
+
+async def get_media_logic(chat_id: int, message_id: int, login_session: str):
+    """
+    Recupera i byte di un media da Telegram in base alla chat e all'ID del messaggio.
+    """
+    _, data = is_logged_in(login_session, True)
+    client = data['client']
+
+    if not client.is_connected():
+        await client.connect()
+
+    try:
+        # Cerca il messaggio specifico su Telegram
+        message = await client.get_messages(chat_id, ids=message_id)
+        
+        # Se il messaggio non esiste o non ha file allegati, ritorna None
+        if not message or not message.media:
+            return None
+        
+        # Scarica i byte puri del file direttamente nella RAM
+        file_bytes = await client.download_media(message, bytes)
+        return file_bytes
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return None

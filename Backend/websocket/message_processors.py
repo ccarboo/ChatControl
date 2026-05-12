@@ -227,12 +227,32 @@ async def _process_encrypted_file(client, entity, event, message_data, parsed, c
                 if (diff_seconds is not None and diff_seconds > allowed_seconds) or (id_message_decifrato in data['ids_']):
                     message_data['error'] = "questo messaggio e' frutto di un replay attack"
                 else:
+                    # 1. Dati base del messaggio
                     message_data['file'] = True
-                    message_data['filename'] = dizionario.get('filename')
-                    message_data['text'] = dizionario.get('text')
-                    message_data['mime'] = dizionario.get('mime')
-                    message_data['size'] = dizionario.get('size')
-                    message_data['secure'] = True
+                    message_data['filename'] = dizionario.get('filename', 'file_sconosciuto')
+                    message_data['text'] = dizionario.get('text', '')
+                    message_data['size'] = dizionario.get('size', 0)
+                    
+                    # 2. Flag ESPLICITO per il frontend: questo file è protetto
+                    message_data['is_secure'] = True 
+                    message_data['secure'] = True # Manteniamo anche il vecchio per retrocompatibilità
+                    
+                    # 3. Estrazione del vero MIME type
+                    mime_type = dizionario.get('mime', 'application/octet-stream')
+                    message_data['mime_type'] = mime_type
+                    message_data['mime'] = mime_type # Manteniamo anche il vecchio
+                    
+                    # 4. Classificazione del media_type per il frontend
+                    if mime_type.startswith('image/'):
+                        message_data['media_type'] = 'photo'
+                    elif mime_type.startswith('video/'):
+                        message_data['media_type'] = 'video'
+                    elif mime_type.startswith('audio/') or mime_type in ['audio/ogg', 'audio/mpeg']:
+                        message_data['media_type'] = 'voice'
+                    else:
+                        message_data['media_type'] = 'document'
+
+                    # Segna l'ID come processato per evitare replay attack
                     data['ids_'].add(id_message_decifrato)
             else:
                 message_data['error'] = "questo messaggio e' stato modificato"
