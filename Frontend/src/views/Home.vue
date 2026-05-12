@@ -1,529 +1,741 @@
 <script>
-import api from '@/services/api'
-import lottie from 'lottie-web'
-import pako from 'pako'
+  import api from '@/services/api'
+  import SecureMedia from '@/components/SecureMedia.vue'
+  import lottie from 'lottie-web'
+  import pako from 'pako'
+     export default {
+        components: {
+          SecureMedia
+        },
+        data: function() {
+            return {
+                errormsg: null,
+                loading: false,
+                some_data: null,
 
-export default {
-  data: function() {
-    return {
-      errormsg: null,
-      loading: false,
-      some_data: null,
-      file: null,
-      chats: [],
-      selectedChat: null,
-      messaggi: [],
-      text: '',
-      useAltSend: false,
-      chatsInterval: null,
-      chatReloadInterval: null,
-      animatedStickerNodes: {},
-      animatedStickerLoaded: new Set(),
-      pageSize: 50,
-      olderPageSize: 20,
-      loadingOlder: false,
-      hasMoreOlder: true,
-      lastChatsAt: 0,
-      chatsInFlight: false,
-      sending: false,
-      dist: false,
-      ws: null,
-      wsChatId: null,
-      realtimeReloadTimer: null,
-      contextMenuVisible: false,
-      contextMenuPos: { x: 0, y: 0 },
-      contextMenuMessage: null,
-      longPressTimer: null,
-      longPressStart: null,
-      longPressDelay: 550,
-    }
-  },
-  methods: {
-    // Gestione Caricamento Immagini Cifrate
-    async loadMessageImage(message) {
-      if (message.tempUrl || message._loading) return;
-      message._loading = true;
-      try {
-        const url = await this.getDecryptedImageUrl(message);
-        message.tempUrl = url;
-      } catch (e) {
-        console.error("Errore decifratura immagine:", e);
-      } finally {
-        message._loading = false;
-      }
-    },
+                file: null,
+                chats: [],
+                selectedChat: null,
+                messaggi: [],
+                text: '',
+                useAltSend: false,
+                chatsInterval: null,
+                chatReloadInterval: null,
+                animatedStickerNodes: {},
+                animatedStickerLoaded: new Set(),
+                pageSize: 50,
+                olderPageSize: 20,
+                loadingOlder: false,
+                hasMoreOlder: true,
+                lastChatsAt: 0,
+                chatsInFlight: false,
+                sending: false,				  // flag dedicato per invio messaggi (separato da loading)
+                dist : false,
+                ws: null,
+                wsChatId: null,
+                realtimeReloadTimer: null,
+                contextMenuVisible: false,
+                contextMenuPos: { x: 0, y: 0 },
+                contextMenuMessage: null,
+                longPressTimer: null,
+                longPressStart: null,
+                longPressDelay: 550,
+            }
+        },
+        methods: {
+            startChatEvents(chatId) {
+              if (this.ws && this.wsChatId === chatId) return
+              this.stopChatEvents()
 
-    async getDecryptedImageUrl(message) {
-      try {
-        // Se non è cifrato, ritorna l'URL standard
-        if (!this.isEncryptedPayload(message)) {
-          return this.mediaUrl(message.id, message.chat_id);
-        }
+              const ws = new WebSocket(`${__WEBSOCKETURL__}/ws/chats/${chatId}`)
+              this.ws = ws
+              this.wsChatId = chatId
 
-        // 1. Scarica il blob cifrato
-        const response = await fetch(this.mediaUrl(message.id, message.chat_id), {
-          credentials: 'include'
-        });
-        if (!response.ok) throw new Error("Errore download");
-        const encryptedBlob = await response.blob();
+              ws.onmessage = (event) => {
+                try {
+                  const payload = JSON.parse(event.data)
+                  this.handleChatEvent(payload)
+                } catch (e) {
+                  console.error('[WS] Errore parsing evento WS:', e)
+                }
+              }
 
-        // 2. Decifratura (Usa la logica decifraFileProcess esistente nel tuo progetto)
-        const decryptedBlob = await this.decifraFileProcess(encryptedBlob, message);
+              ws.onclose = () => {
+                if (this.ws === ws) {
+                  this.ws = null
+                  this.wsChatId = null
+                }
+              }
+            },
+            stopChatEvents() {
+              if (this.ws) {
+                this.ws.close()
+                this.ws = null
+                this.wsChatId = null
+              }
+              if (this.realtimeReloadTimer) {
+                clearTimeout(this.realtimeReloadTimer)
+                this.realtimeReloadTimer = null
+              }
+            },
+            handleChatEvent(payload) {
+              if (!payload || !this.selectedChat) return
+              if (payload.chat_id !== this.selectedChat.id) return
 
-        // 3. Crea URL locale
-        return URL.createObjectURL(decryptedBlob);
-      } catch (e) {
-        console.error(e);
-        return '';
-      }
-    },
+              if (payload.event_type === 'new') {
+                const message = payload.message
+                if (!message || !message.id) return false
 
-    // Funzione fittizia per la decifratura (Sostituirla con la logica reale del progetto)
-    async decifraFileProcess(blob, message) {
-        // Qui andrebbe la logica che usa age/crypto per decifrare il blob
-        return blob; 
-    },
+                if (!message.chat_id) {
+                  message.chat_id = payload.chat_id
+                }
 
-    startChatEvents(chatId) {
-      if (this.ws && this.wsChatId === chatId) return
-      this.stopChatEvents()
-      const ws = new WebSocket(`${__WEBSOCKETURL__}/ws/chats/${chatId}`)
-      this.ws = ws
-      this.wsChatId = chatId
-      ws.onmessage = (event) => {
-        try {
-          const payload = JSON.parse(event.data)
-          this.handleChatEvent(payload)
-        } catch (e) {
-          console.error('[WS] Errore parsing evento WS:', e)
-        }
-      }
-      ws.onclose = () => {
-        if (this.ws === ws) {
-          this.ws = null
-          this.wsChatId = null
-        }
-      }
-    },
-    stopChatEvents() {
-      if (this.ws) {
-        this.ws.close()
-        this.ws = null
-        this.wsChatId = null
-      }
-      if (this.realtimeReloadTimer) {
-        clearTimeout(this.realtimeReloadTimer)
-        this.realtimeReloadTimer = null
-      }
-    },
-    handleChatEvent(payload) {
-      if (!payload || !this.selectedChat) return
-      if (payload.chat_id !== this.selectedChat.id) return
-      if (payload.event_type === 'new') {
-        const message = payload.message
-        if (!message || !message.id) return false
-        if (!message.chat_id) message.chat_id = payload.chat_id
-        const index = this.messaggi.findIndex((m) => m.id === message.id)
-        if (index === -1) {
-          this.messaggi = [...this.messaggi, message]
-        } else {
-          const current = this.messaggi[index]
-          this.messaggi.splice(index, 1, { ...current, ...message })
-        }
-        if (!this.dist) this.scrollToBottom()
-        return true
-      }
-      if (payload.event_type === 'edited') {
-        this.reloadEditedMessage(payload)
-        return
-      }
-      const changed = this.applyChatEvent(payload)
-      if (!changed) this.queueRealtimeReload()
-    },
-    applyChatEvent(payload) {
-      const type = payload.event_type
-      if (type === 'deleted') {
-        const ids = Array.isArray(payload.message_ids) ? payload.message_ids : []
-        if (ids.length === 0) return false
-        const before = this.messaggi.length
-        this.messaggi = this.messaggi.filter((m) => !ids.includes(m.id))
-        for (const id of ids) {
-          this.animatedStickerLoaded.delete(id)
-          delete this.animatedStickerNodes[id]
-        }
-        return this.messaggi.length !== before
-      }
-      const message = payload.message
-      if (!message || !message.id) return false
-      if (!message.chat_id) message.chat_id = payload.chat_id
-      const index = this.messaggi.findIndex((m) => m.id === message.id)
-      if (index === -1) {
-        this.messaggi = [...this.messaggi, message]
-        return true
-      }
-      const current = this.messaggi[index]
-      this.messaggi.splice(index, 1, { ...current, ...message })
-      return true
-    },
-    queueRealtimeReload(options = null) {
-      if (this.realtimeReloadTimer) {
-        clearTimeout(this.realtimeReloadTimer)
-        this.realtimeReloadTimer = null
-      }
-      this.reload_chat(true, options, true)
-    },
-    setAnimatedStickerRef(messageId, el) {
-      if (el) this.animatedStickerNodes[messageId] = el
-    },
-    mediaUrl(messageId, chatId) {
-      const resolvedChatId = chatId ?? this.selectedChat?.id
-      if (!resolvedChatId) return ''
-      return `${__API_URL__}/media/download/${resolvedChatId}/${messageId}`
-    },
-    async initAnimatedStickers() {
-      if (!this.selectedChat) return
-      const chatId = this.selectedChat.id
-      const targets = this.messaggi.filter(
-        (m) => m.media_type === 'sticker_animated' && (!m.mime || m.mime === 'application/x-tgsticker')
-      )
-      for (const m of targets) {
-        if (!this.selectedChat || this.selectedChat.id !== chatId) return
-        if (this.animatedStickerLoaded.has(m.id)) continue
-        const container = this.animatedStickerNodes[m.id]
-        if (!container) continue
-        try {
-          const res = await fetch(this.mediaUrl(m.id, m.chat_id || chatId), { credentials: 'include' })
-          if (!res.ok) continue
-          const buffer = await res.arrayBuffer()
-          const jsonStr = pako.inflate(new Uint8Array(buffer), { to: 'string' })
-          const animationData = JSON.parse(jsonStr)
-          container.innerHTML = ''
-          lottie.loadAnimation({
-            container,
-            renderer: 'svg',
-            loop: true,
-            autoplay: true,
-            animationData
-          })
-          this.animatedStickerLoaded.add(m.id)
-        } catch (e) {
-          console.error('Errore caricamento sticker animato:', e)
-        }
-      }
-    },
-    removeFile() {
-      this.file = null;
-      this.$refs.fileInput.value = '';
-    },
-    handleFileChange(event) {
-      this.file = event.target.files[0];
-    },
-    async get_chats(){
-      const now = Date.now()
-      if (this.chatsInFlight || now - this.lastChatsAt < 5000) return
-      this.errormsg = null
-      this.loading = true
-      this.chatsInFlight = true
-      try {
-          const response = await api.get('/chats', { withCredentials: true })
-          this.chats = response.data.chats
-          this.lastChatsAt = now
-      } catch (e) {
-          this.errormsg = e.response?.data?.detail || e.message
-          if(this.errormsg === "Sessione scaduta. Riesegui il login.") this.$router.push('/')
-      } finally {
-        this.chatsInFlight = false
-        this.loading = false
-      }
-    },
-    async logoutUser() {
-      try { await api.post('/logout') } 
-      catch (e) { console.warn('Logout failed:', e?.message || e) } 
-      finally { this.$router.push('/') }
-    },
-    async selectChat(chat) {
-      if (this.selectedChat && this.selectedChat.id === chat.id) return
-      this.closeMessageMenu()
-      this.selectedChat = chat
-      this.loading = true
-      this.startChatEvents(chat.id)
-      this.animatedStickerLoaded.clear()
-      this.animatedStickerNodes = {}
-      this.loadingOlder = false
-      this.hasMoreOlder = true
-      this.messaggi = []
-      try {
-        const response = await api.get(`/chats/${chat.id}/limit/${this.pageSize}/start/0`, { withCredentials: true })
-        this.messaggi = response.data.messages
-        this.hasMoreOlder = (response.data.messages || []).length > 0
-        await this.init_chat(chat)
-        this.scrollToBottom()
-        this.$nextTick(() => { setTimeout(() => this.initAnimatedStickers(), 100) })
-      } catch (e) {
-        this.errormsg = e.response?.data?.detail || e.message
-        if (this.errormsg === 'Sessione scaduta. Riesegui il login.') this.$router.push('/')
-      } finally { this.loading = false }
-    },
-    async reload_chat(force = false, options = null, silent = false){
-      if (!silent) this.loading = true
-      const chat = this.selectedChat
-      const start = options?.start ?? 0
-      const limit = options?.limit ?? this.pageSize
-      try {
-        const response = await api.get(`/chats/${chat.id}/limit/${limit}/start/${start}`, { withCredentials: true })
-        this.mergeLatestMessages(response.data.messages)
-        return response.data.messages || []
-      } catch (e) {
-        this.errormsg = e.response?.data?.detail || e.message
-      } finally { if (!silent) this.loading = false }
-      return null
-    },
-    async fetchLatestMessages(limit = 1) {
-      if (!this.selectedChat) return
-      try {
-        const response = await api.get(`/chats/${this.selectedChat.id}/limit/${limit}/start/0`, { withCredentials: true })
-        this.mergeLatestMessages(response.data.messages)
-      } catch (e) { this.errormsg = e.response?.data?.message || e.message }
-    },
-    async reloadEditedMessage(payload) {
-      const messageId = payload?.message?.id
-      if (!this.selectedChat || !messageId) { this.queueRealtimeReload(); return; }
-      const idx = this.messaggi.findIndex((m) => m.id === messageId)
-      if (idx === -1) { this.queueRealtimeReload(); return; }
-      const start = Math.max(0, this.messaggi.length - 1 - idx)
-      const limit = start + 1
-      try {
-        const updated = await this.reload_chat(true, { start, limit })
-        if (!updated || updated.length === 0) this.queueRealtimeReload()
-      } catch (e) { this.queueRealtimeReload() }
-    },
-    mergeLatestMessages(latestMessages) {
-      if (!Array.isArray(latestMessages) || latestMessages.length === 0) return
-      const existingIndex = new Map(this.messaggi.map((m, i) => [m.id, i]))
-      const merged = [...this.messaggi]
-      let changed = false
-      for (const msg of latestMessages) {
-        const idx = existingIndex.get(msg.id)
-        if (idx === undefined) { merged.push(msg); changed = true; }
-        else { merged[idx] = { ...merged[idx], ...msg }; changed = true; }
-      }
-      if (changed) this.messaggi = merged
-    },
-    async loadOlderMessages() {
-      if (!this.selectedChat || this.loadingOlder || !this.hasMoreOlder) return
-      const messagesDiv = this.$refs.messagesContainer
-      const prevScrollHeight = messagesDiv ? messagesDiv.scrollHeight : 0
-      const prevScrollTop = messagesDiv ? messagesDiv.scrollTop : 0
-      this.loadingOlder = true
-      try {
-        const start = this.messaggi.length
-        const response = await api.get(`/chats/${this.selectedChat.id}/limit/${this.olderPageSize}/start/${start}`, { withCredentials: true })
-        const older = response.data.messages || []
-        if (older.length === 0) { this.hasMoreOlder = false; return; }
-        this.messaggi = [...older, ...this.messaggi]
-        this.$nextTick(() => {
-          if (messagesDiv) messagesDiv.scrollTop = messagesDiv.scrollHeight - prevScrollHeight + prevScrollTop
-        })
-      } catch (e) { this.errormsg = e.response?.data?.message || e.message }
-      finally { this.loadingOlder = false }
-    },
-    async sendMessage(){
-      if (!this.selectedChat || this.sending) return
-      if (!this.file && !this.text.trim()) return
-      const textToSend = this.text
-      const fileToSend = this.file
-      this.text = ''; this.file = null; this.$refs.fileInput.value = '';
-      this.sending = true
-      try {
-        const formData = new FormData()
-        formData.append('chat_id', this.selectedChat.id)
-        formData.append('cryph', false)
-        formData.append('group', this.selectedChat.is_group)
-        if (fileToSend) {
-          formData.append('file', fileToSend)
-          formData.append('text', textToSend || '')
-          await api.post('/messages/send/file', formData, { withCredentials: true })
-        } else {
-          await api.post('/messages/send', {
-            text: textToSend, chat_id: this.selectedChat.id, cryph: false, group: this.selectedChat.is_group
-          }, { withCredentials: true })
-        }
-      } catch (e) { this.errormsg = e.response?.data?.detail || e.message }
-      finally { 
-        this.sending = false
-        await this.fetchLatestMessages(Math.ceil(textToSend.length / 4096) || 1)
-        this.scrollToBottom()
-      }
-    },
-    async handleSubmit(){ this.useAltSend ? await this.sendChyp() : await this.sendMessage() },
-    async sendChyp(){
-      if (!this.selectedChat || this.sending) return
-      if (!this.file && !this.text.trim()) return
-      const textToSend = this.text; const fileToSend = this.file;
-      this.text = ''; this.file = null; this.$refs.fileInput.value = '';
-      this.sending = true
-      try {
-        const formData = new FormData()
-        formData.append('chat_id', this.selectedChat.id)
-        formData.append('cryph', true)
-        formData.append('group', this.selectedChat.is_group)
-        if (fileToSend) {
-          formData.append('file', fileToSend)
-          formData.append('text', textToSend || '')
-          await api.post('/messages/send/file', formData, { withCredentials: true })
-        } else {
-          await api.post('/messages/send', {
-            text: textToSend, chat_id: this.selectedChat.id, cryph: true, group: this.selectedChat.is_group
-          }, { withCredentials: true })
-        }
-      } catch (e) { this.errormsg = e.response?.data?.message || e.message }
-      finally { this.sending = false; await this.fetchLatestMessages(1); this.scrollToBottom(); }
-    },
-    async sendkey(){
-      if (!this.selectedChat) return
-      this.loading = true
-      try {
-          await api.post('/messages/initializing', { chat_id: this.selectedChat.id }, { withCredentials: true })
-          await this.fetchLatestMessages(1)
-      } catch (e) { this.errormsg = e.response?.data?.message || e.message }
-      finally { this.loading = false }
-    },
-    async init_chat(chat){
-      try { await api.get(`/chats/${chat.id}/inits`, { withCredentials: true }) }
-      catch (e) { this.errormsg = e.response?.data?.detail || e.message }
-    },
-    scrollToBottom() {
-      this.$nextTick(() => {
-        const messagesDiv = this.$refs.messagesContainer
-        if (messagesDiv) messagesDiv.scrollTop = messagesDiv.scrollHeight
-      })
-    },
-    handleMessagesScroll() {
-      if (this._scrollRafPending) return
-      this._scrollRafPending = true
-      requestAnimationFrame(() => {
-        this._scrollRafPending = false
-        if (this.contextMenuVisible) this.closeMessageMenu()
-        const messagesDiv = this.$refs.messagesContainer
-        if (!messagesDiv || this.messaggi.length === 0) return
-        const distanceFromBottom = messagesDiv.scrollHeight - (messagesDiv.scrollTop + messagesDiv.clientHeight)
-        this.dist = distanceFromBottom > 200
-        if (messagesDiv.scrollTop <= 8) this.loadOlderMessages()
-      })
-    },
-    formatFileSize(bytes) {
-      if (!bytes) return '0 B'
-      const k = 1024
-      if (bytes < k) return bytes + ' B'
-      if (bytes < k * k) return (bytes / k).toFixed(1) + ' KB'
-      if (bytes < k * k * k) return (bytes / (k * k)).toFixed(1) + ' MB'
-      return (bytes / (k * k * k)).toFixed(1) + ' GB'
-    },
-    openMessageMenu(event, message) {
-      if (!message) return
-      event.preventDefault(); event.stopPropagation();
-      this.openMessageMenuAt(event.clientX, event.clientY, message)
-    },
-    openMessageMenuAt(x, y, message) {
-      this.contextMenuVisible = true; this.contextMenuMessage = message; this.contextMenuPos = { x, y };
-      this.$nextTick(() => this.adjustMessageMenuPosition())
-    },
-    adjustMessageMenuPosition() {
-      const menu = this.$refs.messageContextMenu
-      if (!menu) return
-      const rect = menu.getBoundingClientRect()
-      const padding = 8
-      let { x, y } = this.contextMenuPos
-      if (x + rect.width + padding > window.innerWidth) x = window.innerWidth - rect.width - padding
-      if (y + rect.height + padding > window.innerHeight) y = window.innerHeight - rect.height - padding
-      this.contextMenuPos = { x: Math.max(padding, x), y: Math.max(padding, y) }
-    },
-    closeMessageMenu() {
-      this.contextMenuVisible = false; this.contextMenuMessage = null; this.clearLongPressTimer();
-    },
-    async handleMessageAction(action) {
-      const message = this.contextMenuMessage
-      if (!message) return
-      if (action === 'reply') {
-        const senderName = message.out ? 'Tu' : (message.sender_username || message.sender_id || 'utente')
-        const body = message.text ? message.text.trim() : ''
-        const replyText = body ? `@${senderName}: ${body}` : `@${senderName}:`
-        this.text = this.text ? `${this.text} ${replyText}` : replyText
-      } else if (action === 'delete') {
-        try {
-          const response = await api.post(`/messages/delete`, { chat_id: this.selectedChat.id, message_id: message.id }, { withCredentials: true })
-          if (response?.data?.status === 'ok') {
-            this.messaggi = this.messaggi.filter((m) => m.id !== message.id)
-            this.animatedStickerLoaded.delete(message.id)
-            delete this.animatedStickerNodes[message.id]
+                const index = this.messaggi.findIndex((m) => m.id === message.id)
+                if (index === -1) {
+                  this.messaggi = [...this.messaggi, message]
+                } else {
+                  const current = this.messaggi[index]
+                  this.messaggi.splice(index, 1, { ...current, ...message })
+                }
+                if (!this.dist) this.scrollToBottom()
+                return true
+              }
+              if (payload.event_type === 'edited') {
+                this.reloadEditedMessage(payload)
+                return
+              }
+              const changed = this.applyChatEvent(payload)
+              if (!changed) {
+                this.queueRealtimeReload()
+              }
+            },
+            applyChatEvent(payload) {
+              const type = payload.event_type
+              if (type === 'deleted') {
+                const ids = Array.isArray(payload.message_ids) ? payload.message_ids : []
+                if (ids.length === 0) return false
+                const before = this.messaggi.length
+                this.messaggi = this.messaggi.filter((m) => !ids.includes(m.id)) //filtra via id cancellati
+                for (const id of ids) {
+                  this.animatedStickerLoaded.delete(id)
+                  delete this.animatedStickerNodes[id]
+                }
+                return this.messaggi.length !== before
+              }
+
+              const message = payload.message
+              if (!message || !message.id) return false
+
+              if (!message.chat_id) {
+                message.chat_id = payload.chat_id
+              }
+
+              const index = this.messaggi.findIndex((m) => m.id === message.id)
+              if (index === -1) {
+                this.messaggi = [...this.messaggi, message]
+                return true
+              }
+
+              const current = this.messaggi[index]
+              this.messaggi.splice(index, 1, { ...current, ...message })
+              return true
+            },
+            queueRealtimeReload(options = null) {
+              if (this.realtimeReloadTimer) {
+                clearTimeout(this.realtimeReloadTimer)
+                this.realtimeReloadTimer = null
+              }
+              // silent=true: non mostra lo spinner di loading durante reload WS
+              this.reload_chat(true, options, true)
+            },
+            setAnimatedStickerRef(messageId, el) {
+              if (el) {
+                this.animatedStickerNodes[messageId] = el
+              }
+            },
+            mediaUrl(messageId, chatId) {
+              const resolvedChatId = chatId ?? this.selectedChat?.id
+              if (!resolvedChatId) return ''
+              return `${__API_URL__}/media/download/${resolvedChatId}/${messageId}`
+            },
+            async initAnimatedStickers() {
+              if (!this.selectedChat) return
+              const chatId = this.selectedChat.id
+              const targets = this.messaggi.filter(
+                (m) => m.media_type === 'sticker_animated' && (!m.mime || m.mime === 'application/x-tgsticker')
+              )
+              for (const m of targets) {
+                if (!this.selectedChat || this.selectedChat.id !== chatId) return
+                if (this.animatedStickerLoaded.has(m.id)) continue
+                const container = this.animatedStickerNodes[m.id]
+                if (!container) continue
+                try {
+                  const res = await fetch(this.mediaUrl(m.id, m.chat_id || chatId), { credentials: 'include' })
+                  if (!res.ok) continue
+                  const buffer = await res.arrayBuffer()
+                  const jsonStr = pako.inflate(new Uint8Array(buffer), { to: 'string' })
+                  const animationData = JSON.parse(jsonStr)
+                  container.innerHTML = ''
+                  lottie.loadAnimation({
+                    container,
+                    renderer: 'svg',
+                    loop: true,
+                    autoplay: true,
+                    animationData
+                  })
+                  this.animatedStickerLoaded.add(m.id)
+                } catch (e) {
+                  console.error('Errore caricamento sticker animato:', e)
+                }
+              }
+            },
+            removeFile() {
+              this.file = null;
+              this.$refs.fileInput.value = '';
+            },
+            handleFileChange(event) {
+              this.file = event.target.files[0];
+            },
+            async get_chats(){
+              const now = Date.now()
+              if (this.chatsInFlight || now - this.lastChatsAt < 5000) return
+              this.errormsg = null
+              this.loading = true
+              this.chatsInFlight = true
+              let response
+              try {
+                  response = await api.get('/chats', { withCredentials: true })
+                  console.log('chat requested:', response.data)
+                  this.chats = response.data.chats
+                this.lastChatsAt = now
+              } catch (e) {
+                  this.errormsg = e.response?.data?.detail || e.message
+                  if(this.errormsg === "Sessione scaduta. Riesegui il login."){
+                    this.$router.push('/')
+                  }
+              } finally {
+                this.chatsInFlight = false
+                  this.loading = false
+              }
+            },
+            async logoutUser() {
+              try {
+                await api.post('/logout')
+              } catch (e) {
+                console.warn('Logout failed:', e?.message || e)
+              } finally {
+                this.$router.push('/')
+              }
+            },
+            async selectChat(chat) {
+              if (this.selectedChat && this.selectedChat.id === chat.id) {
+                return
+              }
+              this.closeMessageMenu()
+              this.selectedChat = chat
+              this.loading = true
+              this.startChatEvents(chat.id)
+
+              // Reset animated stickers quando cambi chat
+              this.animatedStickerLoaded.clear()
+              this.animatedStickerNodes = {}
+              this.loadingOlder = false
+              this.hasMoreOlder = true
+              this.messaggi = []
+
+              try {
+                const response = await api.get(`/chats/${chat.id}/limit/${this.pageSize}/start/0`, { withCredentials: true })
+                this.messaggi = response.data.messages
+                this.hasMoreOlder = (response.data.messages || []).length > 0
+
+                await this.init_chat(chat)
+                this.scrollToBottom()
+
+                // Carica sticker animati dopo che il DOM è renderizzato
+                this.$nextTick(() => {
+                  setTimeout(() => this.initAnimatedStickers(), 100)
+                })
+              } catch (e) {
+                this.errormsg = e.response?.data?.detail || e.message
+                if (this.errormsg === 'Sessione scaduta. Riesegui il login.') {
+                  this.$router.push('/')
+                }
+              } finally {
+                this.loading = false
+              }
+            },
+            // silent=true: non mostra lo spinner (usato da reload WS in background)
+            async reload_chat(force = false, options = null, silent = false){
+              if (!silent) this.loading = true
+              const chat = this.selectedChat
+              const start = options?.start ?? 0
+              const limit = options?.limit ?? this.pageSize
+              try {
+                const response = await api.get(`/chats/${chat.id}/limit/${limit}/start/${start}`, { withCredentials: true })
+                this.mergeLatestMessages(response.data.messages)
+                return response.data.messages || []
+              } catch (e) {
+                this.errormsg = e.response?.data?.detail || e.message
+                if (this.errormsg === 'Sessione scaduta. Riesegui il login.') {
+                  this.$router.push('/')
+                }
+              } finally {
+                if (!silent) this.loading = false
+              }
+              return null
+            },
+            async fetchLatestMessages(limit = 1) {
+              if (!this.selectedChat) return
+              try {
+                const response = await api.get(
+                  `/chats/${this.selectedChat.id}/limit/${limit}/start/0`,
+                  { withCredentials: true }
+                )
+                this.mergeLatestMessages(response.data.messages)
+              } catch (e) {
+                this.errormsg = e.response?.data?.message || e.message
+              }
+            },
+            async reloadEditedMessage(payload) {
+              const messageId = payload?.message?.id
+              if (!this.selectedChat || !messageId) {
+                this.queueRealtimeReload()
+                return
+              }
+
+              const idx = this.messaggi.findIndex((m) => m.id === messageId)
+              if (idx === -1) {
+                this.queueRealtimeReload()
+                return
+              }
+
+              const start = Math.max(0, this.messaggi.length - 1 - idx)
+              const limit = start + 1
+              try {
+                const updated = await this.reload_chat(true, { start, limit })
+                if (!updated || updated.length === 0) {
+                  this.queueRealtimeReload()
+                }
+              } catch (e) {
+                console.error('Errore reload messaggio editato:', e)
+                this.queueRealtimeReload()
+              }
+            },
+            mergeLatestMessages(latestMessages) {
+              if (!Array.isArray(latestMessages) || latestMessages.length === 0) return
+              if (this.messaggi.length === 0) {
+                this.messaggi = latestMessages
+                return
+              }
+
+              const existingIndex = new Map(this.messaggi.map((m, i) => [m.id, i]))
+              const merged = [...this.messaggi]
+              let changed = false
+
+              for (const msg of latestMessages) {
+                const idx = existingIndex.get(msg.id)
+                if (idx === undefined) {
+                  merged.push(msg)
+                  changed = true
+                  continue
+                }
+
+                merged[idx] = { ...merged[idx], ...msg }
+                changed = true
+              }
+
+              if (changed) {
+                this.messaggi = merged
+              }
+            },
+            async loadOlderMessages() {
+              if (!this.selectedChat || this.loadingOlder || !this.hasMoreOlder) return
+
+              const messagesDiv = this.$refs.messagesContainer
+              const prevScrollHeight = messagesDiv ? messagesDiv.scrollHeight : 0
+              const prevScrollTop = messagesDiv ? messagesDiv.scrollTop : 0
+
+              this.loadingOlder = true
+              try {
+                const start = this.messaggi.length
+                const response = await api.get(
+                  `/chats/${this.selectedChat.id}/limit/${this.olderPageSize}/start/${start}`,
+                  { withCredentials: true }
+                )
+                const older = response.data.messages || []
+                if (older.length === 0) {
+                  this.hasMoreOlder = false
+                  return
+                }
+
+                this.messaggi = [...older, ...this.messaggi]
+
+                this.$nextTick(() => {
+                  if (!messagesDiv) return
+                  const newScrollHeight = messagesDiv.scrollHeight
+                  messagesDiv.scrollTop = newScrollHeight - prevScrollHeight + prevScrollTop
+                })
+              } catch (e) {
+                this.errormsg = e.response?.data?.message || e.message
+              } finally {
+                this.loadingOlder = false
+              }
+            },
+            async sendMessage(){
+              if (!this.selectedChat) return
+              // Flag dedicato per il send — non interferisce con loading di get_chats/reload
+              if (this.sending) return
+              if (!this.file && !this.text.trim()) return
+
+              // Cattura i valori correnti e svuota subito l'input — UI snappy
+              const textToSend = this.text
+              const fileToSend = this.file
+              this.text = ''
+              this.file = null
+              this.$refs.fileInput.value = ''
+              this.sending = true
+
+              try {
+                if (fileToSend && textToSend) {
+                  const formData = new FormData()
+                  formData.append('file', fileToSend)
+                  formData.append('text', textToSend)
+                  formData.append('chat_id', this.selectedChat.id)
+                  formData.append('cryph', false)
+                  formData.append('group', this.selectedChat.is_group)
+                  await api.post('/messages/send/file', formData, { withCredentials: true })
+                } else if (fileToSend) {
+                  const formData = new FormData()
+                  formData.append('file', fileToSend)
+                  formData.append('text', textToSend || '')
+                  formData.append('chat_id', this.selectedChat.id)
+                  formData.append('cryph', false)
+                  formData.append('group', this.selectedChat.is_group)
+                  await api.post('/messages/send/file', formData, { withCredentials: true })
+                } else if (textToSend.trim().length !== 0) {
+                  await api.post('/messages/send', {
+                    text: textToSend,
+                    chat_id: this.selectedChat.id,
+                    cryph: false,
+                    group: this.selectedChat.is_group
+                  }, { withCredentials: true })
+                }
+              } catch (e) {
+                this.errormsg = e.response?.data?.detail || e.message
+                if (this.errormsg === 'Sessione scaduta. Riesegui il login.') {
+                  this.$router.push('/')
+                }
+              } finally {
+                this.sending = false
+                const messages_to_load = Math.ceil(textToSend.length / 4096) || 1
+                await this.fetchLatestMessages(messages_to_load)
+                this.scrollToBottom()
+              }
+            },
+            async handleSubmit(){
+              if (this.useAltSend) {
+                await this.sendChyp()
+              } else {
+                await this.sendMessage()
+              }
+            },
+            async sendChyp(){
+              if (!this.selectedChat) return
+              // Blocca double-submit, ma permette file senza testo
+              if (this.sending) return
+              if (!this.file && !this.text.trim()) return
+
+              // Svuota subito l'input — UI snappy
+              const textToSend = this.text
+              const fileToSend = this.file
+              this.text = ''
+              this.file = null
+              this.$refs.fileInput.value = ''
+              this.sending = true
+
+              try {
+                if (fileToSend) {
+                  const formData = new FormData()
+                  formData.append('file', fileToSend)
+                  formData.append('text', textToSend || '')
+                  formData.append('chat_id', this.selectedChat.id)
+                  formData.append('cryph', true)
+                  formData.append('group', this.selectedChat.is_group)
+                  await api.post('/messages/send/file', formData, { withCredentials: true })
+                } else if (textToSend.trim().length !== 0) {
+                  await api.post('/messages/send', {
+                    text: textToSend,
+                    chat_id: this.selectedChat.id,
+                    cryph: true,
+                    group: this.selectedChat.is_group
+                  }, { withCredentials: true })
+                }
+              } catch (e) {
+                this.errormsg = e.response?.data?.message || e.message
+              } finally {
+                this.sending = false
+                await this.fetchLatestMessages(1)
+                this.scrollToBottom()
+              }
+            },
+            async sendkey(){
+              if (!this.selectedChat) {
+                return
+              }
+              this.loading = true
+              try {
+                  await api.post('/messages/initializing', {
+                    chat_id: this.selectedChat.id
+                  }, { withCredentials: true })
+                  await this.fetchLatestMessages(1)
+              } catch (e) {
+                  this.errormsg = e.response?.data?.message || e.message
+              } finally {
+                  this.loading = false
+              }
+            },
+            async init_chat(chat){
+              try {
+                await api.get(`/chats/${chat.id}/inits`, { withCredentials: true })
+              } catch (e) {
+                this.errormsg = e.response?.data?.detail || e.message
+                if (this.errormsg === 'Sessione scaduta. Riesegui il login.') {
+                  this.$router.push('/')
+                }
+              }
+            },
+            scrollToBottom() {
+              this.$nextTick(() => {
+                const messagesDiv = this.$refs.messagesContainer
+                if (messagesDiv) {
+                  messagesDiv.scrollTop = messagesDiv.scrollHeight
+                }
+              })
+            },
+            handleMessagesScroll() {
+              // Throttle via requestAnimationFrame per evitare layout thrashing
+              if (this._scrollRafPending) return
+              this._scrollRafPending = true
+              requestAnimationFrame(() => {
+                this._scrollRafPending = false
+                if (this.contextMenuVisible) {
+                  this.closeMessageMenu()
+                }
+                const messagesDiv = this.$refs.messagesContainer
+                if (!messagesDiv || this.messaggi.length === 0) return
+
+                const distanceFromBottom = messagesDiv.scrollHeight - (messagesDiv.scrollTop + messagesDiv.clientHeight)
+                this.dist = distanceFromBottom > 200
+                if (messagesDiv.scrollTop <= 8) {
+                  this.loadOlderMessages()
+                }
+              })
+            },
+            formatFileSize(bytes) {
+              if (!bytes) return '0 B'
+              const k = 1024
+              if (bytes < k) return bytes + ' B'
+              if (bytes < k * k) return (bytes / k).toFixed(1) + ' KB'
+              if (bytes < k * k * k) return (bytes / (k * k)).toFixed(1) + ' MB'
+              return (bytes / (k * k * k)).toFixed(1) + ' GB'
+            },
+            openMessageMenu(event, message) {
+              if (!message) return
+              event.preventDefault()
+              event.stopPropagation()
+              this.openMessageMenuAt(event.clientX, event.clientY, message)
+            },
+            openMessageMenuAt(x, y, message) {
+              this.contextMenuVisible = true
+              this.contextMenuMessage = message
+              this.contextMenuPos = { x, y }
+              this.$nextTick(() => this.adjustMessageMenuPosition())
+            },
+            adjustMessageMenuPosition() {
+              const menu = this.$refs.messageContextMenu
+              if (!menu) return
+              const rect = menu.getBoundingClientRect()
+              const padding = 8
+              let x = this.contextMenuPos.x
+              let y = this.contextMenuPos.y
+
+              if (x + rect.width + padding > window.innerWidth) {
+                x = window.innerWidth - rect.width - padding
+              }
+              if (y + rect.height + padding > window.innerHeight) {
+                y = window.innerHeight - rect.height - padding
+              }
+              if (x < padding) x = padding
+              if (y < padding) y = padding
+
+              this.contextMenuPos = { x, y }
+            },
+            closeMessageMenu() {
+              this.contextMenuVisible = false
+              this.contextMenuMessage = null
+              this.clearLongPressTimer()
+            },
+            async handleMessageAction(action) {
+              const message = this.contextMenuMessage
+              if (!message) return
+
+              if (action === 'reply') {
+                const senderName = message.out ? 'Tu' : (message.sender_username || message.sender_id || 'utente')
+                const body = message.text ? message.text.trim() : ''
+                const replyText = body ? `@${senderName}: ${body}` : `@${senderName}:`
+                this.text = this.text ? `${this.text} ${replyText}` : replyText
+              } else {
+                this.errormsg = 'Azione non ancora disponibile'
+              }
+              if (action === 'delete') {
+                try {
+                  const response = await api.post(
+                    `/messages/delete`,
+                    { chat_id: this.selectedChat.id, message_id: message.id },
+                    { withCredentials: true }
+                  )
+                  if (response?.data?.status === 'ok') {
+                    this.messaggi = this.messaggi.filter((m) => m.id !== message.id)
+                    this.animatedStickerLoaded.delete(message.id)
+                    delete this.animatedStickerNodes[message.id]
+                  } else {
+                    this.errormsg = response?.data?.detail || 'Cancellazione fallita'
+                  }
+                } catch (e) {
+                  this.errormsg = e.response?.data?.message || e.message
+                } finally {
+                  this.loading = false
+                }
+              }
+
+              this.closeMessageMenu()
+            },
+            handleMessageTouchStart(event, message) {
+              if (!event.touches || event.touches.length !== 1) return
+              const touch = event.touches[0]
+              this.longPressStart = { x: touch.clientX, y: touch.clientY }
+              this.clearLongPressTimer()
+              this.longPressTimer = setTimeout(() => {
+                this.openMessageMenuAt(touch.clientX, touch.clientY, message)
+              }, this.longPressDelay)
+            },
+            handleMessageTouchMove(event) {
+              if (!this.longPressTimer || !this.longPressStart || !event.touches || event.touches.length !== 1) return
+              const touch = event.touches[0]
+              const dx = Math.abs(touch.clientX - this.longPressStart.x)
+              const dy = Math.abs(touch.clientY - this.longPressStart.y)
+              if (dx + dy > 12) {
+                this.clearLongPressTimer()
+              }
+            },
+            handleMessageTouchEnd() {
+              this.clearLongPressTimer()
+            },
+            clearLongPressTimer() {
+              if (this.longPressTimer) {
+                clearTimeout(this.longPressTimer)
+                this.longPressTimer = null
+              }
+            },
+            async handleFileClick(message) {
+              if (!this.selectedChat || !message || !message.id) return
+
+              const parseFilename = (contentDisposition) => {
+                if (!contentDisposition) return null
+                const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i)
+                if (utf8Match && utf8Match[1]) {
+                  try {
+                    return decodeURIComponent(utf8Match[1])
+                  } catch {
+                    return utf8Match[1]
+                  }
+                }
+                const asciiMatch = contentDisposition.match(/filename="?([^";]+)"?/i)
+                return asciiMatch && asciiMatch[1] ? asciiMatch[1] : null
+              }
+
+              const tryDownload = async (url) => {
+                const res = await fetch(url, { credentials: 'include' })
+                if (!res.ok) return { ok: false, status: res.status }
+                const blob = await res.blob()
+                const headerName = parseFilename(res.headers.get('content-disposition'))
+                const filename = headerName || message.filename || 'file'
+
+                const blobUrl = window.URL.createObjectURL(blob)
+                const link = document.createElement('a')
+                link.href = blobUrl
+                link.download = filename
+                document.body.appendChild(link)
+                link.click()
+                link.remove()
+                window.URL.revokeObjectURL(blobUrl)
+                return { ok: true }
+              }
+
+              try {
+                const encryptedUrl = `${__API_URL__}/media/cifrato/download/${this.selectedChat.id}/${message.id}`
+                const plainUrl = `${__API_URL__}/media/download/${this.selectedChat.id}/${message.id}`
+
+                let result = await tryDownload(encryptedUrl)
+                if (!result.ok) {
+                  result = await tryDownload(plainUrl)
+                }
+                if (!result.ok) {
+                  this.errormsg = `Download fallito (${result.status})`
+                }
+              } catch (e) {
+                this.errormsg = e.message || 'Download fallito'
+              }
+            },
+            isEncryptedPayload(message) {
+              if (!message || !message.text) return false
+              try {
+                const parsed = JSON.parse(message.text)
+                const flag = parsed?.CIF || parsed?.cif
+                return flag === 'on' || flag === 'file' || flag === 'message' || flag === 'in'
+              } catch {
+                return false
+              }
+            },
+        },
+        computed: {
+          // Pre-calcola il timestamp formattato per ogni messaggio
+          // evitando che new Date().toLocaleTimeString() venga eseguito
+          // inline nel v-for ad ogni render
+          formattedMessages() {
+            return this.messaggi.map((m) => ({
+              ...m,
+              _timeStr: m.date
+                ? new Date(m.date).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })
+                : ''
+            }))
           }
-        } catch (e) { this.errormsg = e.response?.data?.message || e.message }
-      } else { this.errormsg = 'Azione non ancora disponibile' }
-      this.closeMessageMenu()
-    },
-    handleMessageTouchStart(event, message) {
-      if (!event.touches || event.touches.length !== 1) return
-      const touch = event.touches[0]
-      this.longPressStart = { x: touch.clientX, y: touch.clientY }
-      this.clearLongPressTimer()
-      this.longPressTimer = setTimeout(() => { this.openMessageMenuAt(touch.clientX, touch.clientY, message) }, this.longPressDelay)
-    },
-    handleMessageTouchMove(event) {
-      if (!this.longPressTimer || !this.longPressStart) return
-      const touch = event.touches[0]
-      if (Math.abs(touch.clientX - this.longPressStart.x) + Math.abs(touch.clientY - this.longPressStart.y) > 12) this.clearLongPressTimer()
-    },
-    handleMessageTouchEnd() { this.clearLongPressTimer() },
-    clearLongPressTimer() {
-      if (this.longPressTimer) { clearTimeout(this.longPressTimer); this.longPressTimer = null }
-    },
-    async handleFileClick(message) {
-      if (!this.selectedChat || !message || !message.id) return
-      const tryDownload = async (url) => {
-        const res = await fetch(url, { credentials: 'include' })
-        if (!res.ok) return { ok: false }
-        const blob = await res.blob()
-        const link = document.createElement('a')
-        link.href = window.URL.createObjectURL(blob)
-        link.download = message.filename || 'file'
-        link.click()
-        return { ok: true }
-      }
-      try {
-        const encryptedUrl = `${__API_URL__}/media/cifrato/download/${this.selectedChat.id}/${message.id}`
-        const plainUrl = `${__API_URL__}/media/download/${this.selectedChat.id}/${message.id}`
-        if (!(await tryDownload(encryptedUrl)).ok) await tryDownload(plainUrl)
-      } catch (e) { this.errormsg = e.message || 'Download fallito' }
-    },
-    isEncryptedPayload(message) {
-      if (!message || !message.text) return false
-      try {
-        const parsed = JSON.parse(message.text)
-        const flag = parsed?.CIF || parsed?.cif
-        return ['on', 'file', 'message', 'in'].includes(flag)
-      } catch { return false }
-    },
-  },
-  computed: {
-    formattedMessages() {
-      return this.messaggi.map((m) => ({
-        ...m,
-        _timeStr: m.date ? new Date(m.date).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }) : ''
-      }))
+        },
+        watch: {
+          // shallow watch: si triggera solo quando viene sostituito l'intero array,
+          // non ad ogni modifica interna (deep:true era inutilmente costoso)
+          messaggi() {
+            this.$nextTick(() => this.initAnimatedStickers())
+          }
+        },
+        mounted() {
+            this.get_chats()
+            this.chatsInterval = setInterval(() => {
+                this.get_chats()
+            }, 20000)
+            /*this.chatReloadInterval = setInterval(() => {
+                if (this.selectedChat) {
+                    this.reload_chat()
+                }
+            }, 5000)*/
+        },
+        beforeUnmount() {
+            if (this.chatsInterval) clearInterval(this.chatsInterval)
+            if (this.chatReloadInterval) clearInterval(this.chatReloadInterval)
+          this.clearLongPressTimer()
+          this.stopChatEvents()
+        }
     }
-  },
-  watch: {
-    messaggi() { this.$nextTick(() => this.initAnimatedStickers()) }
-  },
-  mounted() {
-      this.get_chats()
-      this.chatsInterval = setInterval(() => { this.get_chats() }, 20000)
-  },
-  beforeUnmount() {
-      if (this.chatsInterval) clearInterval(this.chatsInterval)
-      this.clearLongPressTimer(); this.stopChatEvents();
-  }
-}
 </script>
 <template>
   <div class="container-fluid vh-100">
@@ -531,16 +743,28 @@ export default {
       
       <div class="col-md-4 col-lg-3 border-end p-0 bg-light d-flex flex-column h-100">
         <div class="p-3 border-bottom bg-white d-flex align-items-center gap-2">
-          <button class="btn p-0 border-0 bg-transparent" type="button" data-bs-toggle="offcanvas" data-bs-target="#menuOffcanvas">
+          <button
+            class="btn p-0 border-0 bg-transparent"
+            type="button"
+            data-bs-toggle="offcanvas"
+            data-bs-target="#offcanvasWithBothOptions"
+            aria-controls="offcanvasWithBothOptions"
+          >
             <img src="/menu.svg" alt="Menu" style="width: 20px; height: 20px;">
           </button>
           <h5 class="mb-0">Le mie Chat</h5>
         </div>
 
-        <div class="offcanvas offcanvas-start" tabindex="-1" id="menuOffcanvas">
+        <div
+          class="offcanvas offcanvas-start"
+          data-bs-scroll="true"
+          tabindex="-1"
+          id="offcanvasWithBothOptions"
+          aria-labelledby="offcanvasWithBothOptionsLabel"
+        >
           <div class="offcanvas-header">
-            <h5 class="offcanvas-title">Menu</h5>
-            <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+            <h5 class="offcanvas-title" id="offcanvasWithBothOptionsLabel">Menu</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
           </div>
           <div class="offcanvas-body">
             <button type="button" class="btn btn-outline-danger w-100" @click="logoutUser">Logout</button>
@@ -548,9 +772,13 @@ export default {
         </div>
 
         <div class="list-group list-group-flush overflow-auto flex-grow-1">
-          <button v-for="chat in chats" :key="chat.id" @click="selectChat(chat)"
+          <button 
+            v-for="chat in chats" 
+            :key="chat.id"
+            @click="selectChat(chat)"
             class="list-group-item list-group-item-action py-3 border-0"
-            :class="{ 'active-chat': selectedChat && selectedChat.id === chat.id }">
+            :class="{ 'active-chat': selectedChat && selectedChat.id === chat.id }"
+          >
             <div class="d-flex align-items-center">
               <div class="rounded-circle bg-primary text-white d-flex align-items-center justify-content-center flex-shrink-0" style="width: 45px; height: 45px;">
                 {{ chat.name.charAt(0) }}
@@ -558,7 +786,20 @@ export default {
               <div class="ms-3 overflow-hidden">
                 <div class="d-flex justify-content-between align-items-center">
                   <strong class="text-truncate">{{ chat.name }}</strong>
-                  <img :src="chat.cyphered ? '/lock.svg' : '/unlock.svg'" style="width: 16px;">
+                  <img 
+                    v-if="chat.cyphered" 
+                    src="/lock.svg" 
+                    alt="Cifrata" 
+                    class="ms-2" 
+                    style="width: 16px; height: 16px;"
+                  >
+                  <img 
+                    v-else 
+                    src="/unlock.svg" 
+                    alt="Non cifrata" 
+                    class="ms-2" 
+                    style="width: 16px; height: 16px;"
+                  >
                 </div>
                 <div class="small text-muted text-truncate">{{ chat.last_msg }}</div>
               </div>
@@ -576,74 +817,184 @@ export default {
           
           <div class="messages-area flex-grow-1">
             <div ref="messagesContainer" class="messages-scroll p-3 bg-chat" @scroll="handleMessagesScroll">
-              <div v-for="m in formattedMessages" :key="m.id" class="message-wrapper"
-                :class="{ 'message-out': m.out, 'message-in': !m.out, 'message-system': !!m.chiave, 'message-system-type': !!m.system_type}"
-                @contextmenu.prevent="openMessageMenu($event, m)">
-                
-                <div class="message-bubble" :class="{'message-error': m.error, 'message-system-bubble': !!m.chiave}">
-                  <div v-if="!m.chiave && !m.system_type" class="message-header">
-                    <span class="message-sender">{{ m.out ? 'Tu' : (m.sender_username || m.sender_id) }}</span>
-                    <img v-if="m.secure" src="/lock.svg" class="message-secure-icon">
-                  </div>
+               
+               <div 
+                 v-for="m in formattedMessages" 
+                 :key="m.id" 
+                 class="message-wrapper"
+                 :class="{ 'message-out': m.out, 'message-in': !m.out, 'message-system': !!m.chiave, 'message-system-type': !!m.system_type}"
+                 @contextmenu.prevent="openMessageMenu($event, m)"
+                 @touchstart="handleMessageTouchStart($event, m)"
+                 @touchmove="handleMessageTouchMove($event)"
+                 @touchend="handleMessageTouchEnd"
+                 @touchcancel="handleMessageTouchEnd"
+               >
+                 <div 
+                   class="message-bubble"
+                   :class="{
+                     'message-error': m.error,
+                     'message-system-bubble': !!m.chiave,
+                     'message-system-type-bubble': !!m.system_type
+                   }"
+                 >
+                   <template v-if="m.system_type">
+                     <div class="message-system-content">
+                       <span class="message-system-label">{{ m.system_type }}</span>
+                     </div>
+                   </template>
 
-                  <div v-if="m.file">
-                    <div v-if="m.media_type === 'photo'" class="media-container mb-2">
-                      <div v-if="isEncryptedPayload(m) && !m.tempUrl" class="text-center p-2">
-                        <div class="spinner-border spinner-border-sm text-primary"></div>
-                        <span>Decifratura...</span>
-                        {{ loadMessageImage(m) }}
-                      </div>
-                      <img v-if="!isEncryptedPayload(m) || m.tempUrl"
-                        :src="isEncryptedPayload(m) ? m.tempUrl : mediaUrl(m.id, m.chat_id)"
-                        class="img-fluid rounded shadow-sm" style="max-width: 100%; max-height: 300px;" @click="handleFileClick(m)">
-                    </div>
+                   <template v-else>
+                     <div v-if="!m.chiave" class="message-header">
+                       <span class="message-sender">
+                         {{ m.out ? 'Tu' : (m.sender_username || m.sender_id) }}
+                       </span>
+                       <img
+                         v-if="m.secure"
+                         src="/lock.svg"
+                         alt="Cifrato"
+                         class="message-secure-icon"
+                       >
+                     </div>
+                     
+                     <div v-if="m.file">
+                       
+                       <template v-if="m.secure">
+                         <SecureMedia :message="m" :chatId="selectedChat.id" />
+                       </template>
+                       
+                       <template v-else>
+                         
+                         <div v-if="m.media_type === 'document'" class="file-container" @click="handleFileClick(m)">
+                           <img src="/file.svg" alt="file" class="file-icon">
+                           <div class="file-info">
+                             <div class="file-name">{{ m.filename }}</div>
+                             <div class="file-size" v-if="m.size">{{ formatFileSize(m.size) }}</div>
+                           </div>
+                         </div>
+                         
+                         <div v-else-if="m.media_type === 'photo'" class="media-container">
+                           <img :src="mediaUrl(m.id, m.chat_id)" alt="photo" class="media-image" style="max-width: 100%; max-height: 300px; border-radius: 8px;">
+                           <div class="file-size" v-if="m.size">{{ formatFileSize(m.size) }}</div>
+                         </div>
+                         
+                         <div v-else-if="m.media_type === 'video'" class="media-container">
+                           <video controls style="max-width: 100%; max-height: 300px; border-radius: 8px;">
+                             <source :src="mediaUrl(m.id, m.chat_id)" :type="m.mime || 'video/mp4'">
+                             Errore: browser non supporta video
+                           </video>
+                           <div class="file-size" v-if="m.size">{{ formatFileSize(m.size) }}</div>
+                         </div>
 
-                    <div v-else-if="m.media_type === 'document' && !m.mime?.startsWith('image/')" class="file-container" @click="handleFileClick(m)">
-                      <img src="/file.svg" class="file-icon">
-                      <div class="file-info">
-                        <div class="file-name">{{ m.filename || 'Documento' }}</div>
-                        <div class="file-size">{{ formatFileSize(m.size) }}</div>
-                      </div>
-                    </div>
-                  </div>
+                       </template>
+                     </div>
+                       
+                     <div v-else-if="m.media_type === 'sticker'" class="media-container">
+                       <img :src="mediaUrl(m.id, m.chat_id)" alt="sticker" class="sticker-icon" style="width: 150px; height: 150px;">
+                     </div>
+                       
+                     <div v-else-if="m.media_type === 'sticker_animated'" class="media-container">
+                       <video v-if="m.mime && m.mime.startsWith('video/')" autoplay loop muted playsinline style="width: 150px; height: 150px; border-radius: 8px;">
+                         <source :src="mediaUrl(m.id, m.chat_id)" :type="m.mime">
+                       </video>
+                       <div
+                         v-else
+                         class="sticker-anim-container"
+                         style="width: 150px; height: 150px;"
+                         :ref="(el) => setAnimatedStickerRef(m.id, el)"
+                       ></div>
+                     </div>
+                       
+                     <div v-else-if="m.media_type === 'gif'" class="media-container">
+                       <video autoplay loop muted playsinline style="max-width: 100%; max-height: 300px; border-radius: 8px;">
+                         <source :src="mediaUrl(m.id, m.chat_id)" type="video/mp4">
+                       </video>
+                       <div class="file-size" v-if="m.size">{{ formatFileSize(m.size) }}</div>
+                     </div>
 
-                  <div class="message-text">
-                    <template v-if="m.chiave">
-                      <div class="message-system-content">
-                        <img src="/key.svg" class="message-key-icon">
-                        <span class="message-system-key">{{ m.chiave }}</span>
-                      </div>
-                    </template>
-                    <template v-else>{{ m.text }}</template>
-                  </div>
-                  <div class="message-time">{{ m._timeStr }}</div>
-                </div>
-              </div>
+                     <div class="message-text" v-if="!m.error">
+                        <template v-if="m.chiave">
+                          <div class="message-system-content">
+                            <img src="/key.svg" alt="Chiave" class="message-key-icon">
+                            <span class="message-system-key">{{ m.chiave }}</span>
+                          </div>
+                        </template>
+                        <template v-else>
+                          {{ m.text }}
+                        </template>
+                     </div>
+                     <div class="message-text" v-else>
+                         {{m.error}}<img src="/alert-triangle.svg" alt="Invia" class="send-icon">
+                     </div>
+                     
+                     <div class="message-time">
+                       {{ m._timeStr }}
+                     </div>
+                   </template> </div> 
+               </div>
+               
+               <div v-if="contextMenuVisible" class="message-context-backdrop" @click="closeMessageMenu"></div>
+               <div
+                 v-if="contextMenuVisible"
+                 ref="messageContextMenu"
+                 class="message-context-menu"
+                 :style="{ top: contextMenuPos.y + 'px', left: contextMenuPos.x + 'px' }"
+                 @click.stop
+               >
+                 <button type="button" class="message-context-item" @click="handleMessageAction('reply')">Rispondi</button>
+                 <button type="button" class="message-context-item" @click="handleMessageAction('edit')">Modifica</button>
+                 <button type="button" class="message-context-item" @click="handleMessageAction('pin')">Pin</button>
+                 <button type="button" class="message-context-item danger" @click="handleMessageAction('delete')">Elimina</button>
+               </div>
             </div>
+
+            <button
+              type="button"
+              class="btn btn-primary chat-overlay-btn"
+              @click="scrollToBottom"
+              v-show="dist"
+            >
+              <img src="/arrow-down.svg" alt="Invia" class="send-icon">
+            </button>
           </div>
 
           <form @submit.prevent="handleSubmit()">
             <div class="p-3 border-top d-flex align-items-center gap-2">
-              <input v-model="text" type="text" class="form-control" placeholder="Scrivi un messaggio...">
+              <input
+                v-model="text"
+                type="text"
+                class="form-control"
+                placeholder="Scrivi un messaggio..."
+              >
               <div class="form-check">
                 <input class="form-check-input" type="checkbox" id="altSend" v-model="useAltSend">
                 <label class="form-check-label" for="altSend">cifra</label>
               </div>
-
-              <button type="submit" class="btn btn-primary send-btn" :disabled="sending || (file && text.length >= 1024)">
-                <img v-if="!sending" src="/send.svg" class="send-icon">
-                <span v-else class="spinner-border spinner-border-sm"></span>
+              <button type="submit" class="btn btn-primary send-btn" v-if="!file || text.length < 1024">
+                <img src="/send.svg" alt="Invia" class="send-icon">
               </button>
-
-              <input ref="fileInput" type="file" style="display: none" @change="handleFileChange">
+              <div v-else-if="file && text.length >= 1024" class="d-flex align-items-center gap-2">
+                <button type="button" class="btn btn-secondary send-btn" disabled title="Messaggio troppo lungo">
+                  <img src="/send.svg" alt="Messaggio troppo lungo" class="send-icon" style="opacity: 0.5">
+                </button>
+                <small class="text-danger">Messaggio troppo lungo ({{ text.length }}/1024)</small>
+              </div>
+              <input
+                ref="fileInput" 
+                type="file"
+                style="display: none"
+                @change="handleFileChange"
+              />
               <button type="button" class="btn btn-primary send-btn" @click="$refs.fileInput.click()">
-                <img src="/paperclip.svg" class="send-icon">
+                <img src="/paperclip.svg" alt="Allega" class="send-icon" />
               </button>
-            </div>
+              <button v-if="file" type="button" class="btn btn-danger" @click="removeFile">
+                Rimuovi file
+              </button>
+            </div>  
           </form>
         </div>
 
-        <div v-else class="h-100 d-flex align-items-center justify-content-center bg-light text-muted">
+        <div v-else class="btn btn-primary h-100 d-flex align-items-center justify-content-center bg-light text-muted">
           Seleziona una chat per iniziare a messaggiare
         </div>
       </div>
@@ -651,6 +1002,7 @@ export default {
     </div>
   </div>
 </template>
+
 <style scoped>
 /* Messaggi con system_type centrati e colorati */
 .message-wrapper.message-system-type {
