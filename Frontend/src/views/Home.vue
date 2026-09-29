@@ -812,7 +812,7 @@
         <div v-if="selectedChat" class="d-flex flex-column h-100">
           <div class="p-3 border-bottom d-flex align-items-center justify-content-between bg-light">
             <strong>{{ selectedChat.name }}</strong>
-            <button @click="sendkey()" class="btn btn-primary btn-sm">Invia chiave</button>
+            <button @click="sendkey()" class="btn btn-chiave btn-invia-chiave">Invia chiave</button>
           </div>
           
           <div class="messages-area flex-grow-1">
@@ -822,7 +822,7 @@
                  v-for="m in formattedMessages" 
                  :key="m.id" 
                  class="message-wrapper"
-                 :class="{ 'message-out': m.out, 'message-in': !m.out, 'message-system': !!m.chiave, 'message-system-type': !!m.system_type}"
+                 :class="{ 'message-out': m.out, 'message-in': !m.out, 'message-system': !!m.chiave, 'message-system-type': !!m.system_type, 'messaggio-cifrato-attivo': m.secure}"
                  @contextmenu.prevent="openMessageMenu($event, m)"
                  @touchstart="handleMessageTouchStart($event, m)"
                  @touchmove="handleMessageTouchMove($event)"
@@ -958,18 +958,25 @@
           </div>
 
           <form @submit.prevent="handleSubmit()">
-            <div class="p-3 border-top d-flex align-items-center gap-2">
+            <div class="p-3 border-top d-flex align-items-center gap-2"
+            :class="{ 'barra-nascondi-attiva': useAltSend }"
+            >
               <input
                 v-model="text"
                 type="text"
                 class="form-control"
                 placeholder="Scrivi un messaggio..."
               >
-              <div class="form-check">
-                <input class="form-check-input" type="checkbox" id="altSend" v-model="useAltSend">
-                <label class="form-check-label" for="altSend">cifra</label>
-              </div>
-              <button type="submit" class="btn btn-primary send-btn" v-if="!file || text.length < 1024">
+              <button 
+                type="button" 
+                class="btn" 
+                :class="useAltSend ? 'btn-light' : 'btn-outline-secondary'" 
+                @click="useAltSend = !useAltSend"
+                style="white-space: nowrap;"
+              >
+                {{ useAltSend ? 'Mostra' : 'Nascondi' }}
+              </button>
+              <button type="submit" class="btn btn-chiave send-btn" v-if="!file || text.length < 1024">
                 <img src="/send.svg" alt="Invia" class="send-icon">
               </button>
               <div v-else-if="file && text.length >= 1024" class="d-flex align-items-center gap-2">
@@ -984,7 +991,7 @@
                 style="display: none"
                 @change="handleFileChange"
               />
-              <button type="button" class="btn btn-primary send-btn" @click="$refs.fileInput.click()">
+              <button type="button" class="btn btn-chiave send-btn" @click="$refs.fileInput.click()">
                 <img src="/paperclip.svg" alt="Allega" class="send-icon" />
               </button>
               <button v-if="file" type="button" class="btn btn-danger" @click="removeFile">
@@ -1227,16 +1234,16 @@
 
 /* Bottone invio quadrato e icona centrata */
 .send-btn {
-  width: 40px;
-  height: 40px;
+  width: 38px;
+  height: 38px;
   padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 .send-icon {
-  width: 22px;
-  height: 22px;
+  width: 25px;
+  height: 25px;
   display: block;
   margin: auto;
 }
@@ -1276,7 +1283,61 @@
   opacity: 0.8;
   margin-top: 2px;
 }
+.barra-nascondi-attiva {
+  background-color: #2b2b2b !important;
+  color: #ffffff !important;
+  transition: all 0.3s ease;
+}
+.barra-nascondi-attiva .form-check-label {
+  color: #ffffff !important;
+}
+.barra-nascondi-attiva .form-control {
+  background-color: #3b3b3b !important; /* Grigio leggermente più chiaro per staccare dal fondo */
+  border-color: #555 !important;
+  color: #ffffff !important;
+}
+.barra-nascondi-attiva .form-control::placeholder {
+  color: #a0a0a0 !important;
+}
+.barra-nascondi-attiva .btn-chiave {
+  background-color: #4a4a4a !important;
+  border-color: #555 !important;
+}
+.barra-nascondi-attiva .btn-chiave:hover {
+  background-color: #5a5a5a !important;
+}
 
+.barra-nascondi-attiva .send-icon {
+  filter: invert(1) brightness(2);
+}
+.btn-chiave {
+  background-color: #64748b !important; 
+  border-color: #475569 !important;
+  color: #ffffff !important;
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
 
-
-</style>
+.btn-chiave:hover {
+  background-color: #475569 !important;
+}
+.btn-invia-chiave {
+  padding: 6px 14px !important;
+  font-size: 1rem !important;
+  font-weight: 500 !important;
+}
+.messaggio-cifrato-attivo .message-bubble {
+  background-color: #3b3b3b !important;
+  color: #ffffff !important;
+  border: 1px solid #555;
+}
+.messaggio-cifrato-attivo .message-header {
+  color: #c0c0c0 !important;
+}
+.messaggio-cifrato-attivo .message-secure-icon {
+  filter: invert(1) brightness(2) !important; /* Trasforma l'icona nera in bianca */
+  width: 16px !important; /* Leggermente più grande */
+  height: 16px !important;
+  opacity: 1 !important; /* Rimuove eventuali trasparenze */
+}
+</style>    
