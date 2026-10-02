@@ -714,10 +714,6 @@ async def download_encrypt_media_logic(chat_id: int, message_id: int, login_sess
             finally:
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
-
-                yield bytes(buffer)
-            async for chunk in decrypted_stream:
-                yield chunk
                 
         return StreamingResponse(
             _file_stream_generator(), media_type=mime_type,
