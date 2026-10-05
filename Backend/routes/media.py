@@ -2,12 +2,19 @@ from fastapi import APIRouter, Cookie, HTTPException
 from fastapi.responses import StreamingResponse
 import io
 import json
+import os
 
+from urllib.parse import quote
 from services import message_service
 from services.crypto_service import decifra_payload_stream  # <-- IMPORTIAMO QUELLA GIUSTA!
 from services.auth_service import is_logged_in
 
 router = APIRouter()
+
+ALLOWED_INLINE_MIME = {
+    "image/jpeg", "image/png", "image/gif", "image/webp",
+    "video/mp4", "video/webm",
+}
 
 @router.get("/media/download/{chat_id}/{message_id}")
 async def download_media(chat_id: int, message_id: int, login_session: str = Cookie(None)):
@@ -94,12 +101,17 @@ async def secure_download_media(chat_id: int, message_id: int, login_session: st
         mime_type = dizionario.get('mime', 'application/octet-stream')
         filename = dizionario.get('filename', 'secure_file')
 
-        # 6. Invio magico al Frontend
+        if mime_type not in ALLOWED_INLINE_MIME:
+            mime_type = 'application/octet-stream'
+        safe_name = os.path.basename(str(filename)).replace('\r', '').replace('\n', '') or 'file'
+        
         return StreamingResponse(
             io.BytesIO(decrypted_file_bytes),
             media_type=mime_type,
             headers={
-                "Content-Disposition": f'inline; filename="{filename}"'
+                "Content-Disposition": f"inline; filename*=UTF-8''{quote(safe_name)}",
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
             }
         )
 

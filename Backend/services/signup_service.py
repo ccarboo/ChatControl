@@ -13,7 +13,6 @@ from database.sqlite import get_connection
 from core.config import pepper, secret_key
 from services.crypto_service import deriva_master_key, cifra_vault
 from services.auth_service import login_cache
-from services.realtime_service import register_telethon_handlers
 from services.user_service import check_username_unicity
 
 cipher = Fernet(secret_key.decode())

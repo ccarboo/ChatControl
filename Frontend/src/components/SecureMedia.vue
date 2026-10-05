@@ -51,7 +51,17 @@ export default {
     }
   },
   async mounted() {
-    await this.loadSecureMedia();
+    const mime = this.message.mime || this.message.mime_type || '';
+    const size = Number(this.message.size) || 0;
+    const MAX_INLINE = 10 * 1024 * 1024;
+    const inlineOk = (mime.startsWith('image/') || mime.startsWith('video/')) && size <= MAX_INLINE;
+    if (inlineOk) {
+      await this.loadSecureMedia();
+    } else {
+      this.actualMediaType = 'document';
+      this.actualFilename = this.message.filename || 'file_cifrato';
+      this.loading = false;
+    }
   },
   beforeUnmount() {
     if (this.localUrl) {
@@ -85,9 +95,10 @@ export default {
 
         // Estrae il nome originale del file
         const disposition = response.headers.get('Content-Disposition') || '';
-        const match = disposition.match(/filename="?([^";]+)"?/);
+        const match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
         if (match) {
-          this.actualFilename = match[1];
+          try { this.actualFilename = decodeURIComponent(match[1]); }
+          catch {this.actualFilename = match[1];}
         } else if (this.message.filename) {
           this.actualFilename = this.message.filename;
         }
@@ -103,14 +114,30 @@ export default {
         this.loading = false;
       }
     },
-    downloadDocument() {
-      if (!this.localUrl) return;
-      const a = document.createElement('a');
-      a.href = this.localUrl;
-      a.download = this.actualFilename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
+    async downloadDocument() {
+      let url = this.localUrl;
+      let temp = false;
+      try {
+        if (!url) {
+          const baseUrl = typeof __API_URL__ !== 'undefined' ? __API_URL__ : 'http://localhost:8000';
+          const r = await fetch(`${baseUrl}/media/cifrato/download/${this.chatId}/${this.message.id}`,
+                                { credentials: 'include' });
+          if (!r.ok) throw new Error('Download fallito: ' + r.status);
+          url = URL.createObjectURL(await r.blob());
+          temp = true;
+        }
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = this.actualFilename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      } catch (e) {
+        console.error(e);
+        this.error = true;
+      } finally {
+        if (temp && url) URL.revokeObjectURL(url);
+      }
     }
   }
 }

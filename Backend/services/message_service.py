@@ -8,6 +8,7 @@ import mimetypes
 import io
 import time
 import hashlib
+import traceback
 
 from fastapi import HTTPException
 from telethon.tl.types import DocumentAttributeFilename
