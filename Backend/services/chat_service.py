@@ -716,16 +716,16 @@ async def download_encrypt_media_logic(chat_id: int, message_id: int, login_sess
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
                 
-                safe_name = out_filename.replace('\r', '').replace('\n', '') or 'file'
-                return StreamingResponse(
-                    _file_stream_generator(), media_type=mime_type,
-                    headers={
-                        'Content-Disposition': f"attachment; filename*=UTF-8''{quote(safe_name)}",
-                        'Cache-Control': 'no-store',
-                        'X-Content-Type-Options': 'nosniff',
-                    }
-                )
-            
+        safe_name = out_filename.replace('\r', '').replace('\n', '') or 'file'
+        return StreamingResponse(
+            _file_stream_generator(), media_type=mime_type,
+            headers={
+                'Content-Disposition': f"attachment; filename*=UTF-8''{quote(safe_name)}",
+                'Cache-Control': 'no-store',
+                'X-Content-Type-Options': 'nosniff',
+            }
+        )
+        
     except HTTPException:
         raise
     except Exception as e:
